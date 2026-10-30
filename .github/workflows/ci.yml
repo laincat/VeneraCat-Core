@@ -1,0 +1,99 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        if: runner.os != 'Windows'
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test -race -count=1 ./...
+      # Shuffled order catches tests that depend on another test having run first —
+      # the same class of failure as a shared stub across parallel Swift tests.
+      - name: test (shuffled)
+        run: go test -shuffle=on -count=1 ./...
+      - name: docs
+        if: runner.os == 'Linux'
+        run: sh scripts/check-docs.sh
+      - name: Error text is English
+        run: sh scripts/check-error-text.sh
+
+  apple:
+    name: Apple (xcframework + Swift smoke test)
+    runs-on: macos-26
+    needs: go
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Build xcframework and measure
+        run: |
+          set -o pipefail
+          mkdir -p build
+          sh scripts/mac-verify.sh 2>&1 | tee build/mac-verify.log
+        shell: bash
+      - name: Swift smoke test (macOS)
+        working-directory: apple/CoreSmoke
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee ../../build/smoke-macos.log
+        shell: bash
+      - name: Swift smoke test (iOS simulator)
+        working-directory: apple/CoreSmoke
+        run: |
+          set -o pipefail
+          # SwiftPM names the test scheme "<Package>-Package" when it has no product.
+          scheme=$(xcodebuild -list -json | python3 -c 'import json,sys; d=json.load(sys.stdin); s=(d.get("workspace") or d.get("project") or {}).get("schemes",[]); print(next((x for x in s if x.endswith("-Package")), s[0] if s else "CoreSmoke"))')
+          echo "scheme=$scheme"
+          xcodebuild test -scheme "$scheme" \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            2>&1 | tee ../../build/smoke-ios.log | grep -E 'SMOKE|Test Case|error:|\*\* TEST' || true
+          grep -q '\*\* TEST SUCCEEDED \*\*' ../../build/smoke-ios.log
+        shell: bash
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## Apple build'
+            echo '```'
+            grep -h '^RESULT' build/mac-verify.log 2>/dev/null || echo 'no results'
+            grep -h 'SMOKE' build/smoke-*.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        shell: bash
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: apple-build
+          path: |
+            build/*.log
+            build/VeneraCatCore.xcframework
+          retention-days: 7

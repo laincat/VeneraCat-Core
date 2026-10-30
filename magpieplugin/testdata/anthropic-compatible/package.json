@@ -1,0 +1,8 @@
+{
+  "name": "@example/anthropic-compatible",
+  "version": "0.1.0",
+  "description": "A provider package for the Anthropic Messages dialect, using only fetch.",
+  "main": "./index.mjs",
+  "type": "module",
+  "license": "MIT"
+}

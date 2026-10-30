@@ -1,0 +1,8 @@
+{
+  "name": "@example/openai-compatible",
+  "version": "0.1.0",
+  "description": "A provider package that needs nothing but fetch: an OpenAI-compatible endpoint.",
+  "main": "./index.mjs",
+  "type": "module",
+  "license": "MIT"
+}
