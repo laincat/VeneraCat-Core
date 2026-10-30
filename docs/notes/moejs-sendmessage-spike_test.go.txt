@@ -1,0 +1,51 @@
+package spike
+
+import (
+	"testing"
+
+	"github.com/MoeForge/moejs"
+	"github.com/MoeForge/moejs/eventloop"
+)
+
+// sendMessage returns a sync value for "echo" and a Promise for "later".
+func TestSendMessageShape(t *testing.T) {
+	rt := moejs.NewRuntime(moejs.Options{})
+	loop, err := eventloop.New(rt, eventloop.Options{})
+	if err != nil { t.Fatal(err) }
+	err = rt.SetGlobal("sendMessage", moejs.NativeFunc(func(r *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {
+		msg, err := r.ToGoStrict(moejs.Arg(args, 0))
+		if err != nil { return moejs.Undefined(), err }
+		m := msg.(map[string]any)
+		switch m["method"] {
+		case "echo":
+			return r.FromGo(m["value"])
+		case "later":
+			p, settle := loop.NewPromise()
+			go settle(func(rt *moejs.Runtime) (moejs.Value, error) { return rt.FromGo("done") })
+			return p, nil
+		case "bytes":
+			return r.FromGo([]byte{1, 2, 3})
+		}
+		return moejs.Undefined(), nil
+	}))
+	if err != nil { t.Fatal(err) }
+	src := `
+globalThis.out = [];
+let x = sendMessage({method:"echo", value:{a:[1,2,{b:12345678901234567890n}]}});
+out.push(JSON.stringify(x, (k,v)=> typeof v==="bigint"? v.toString(): v));
+let b = sendMessage({method:"bytes"});
+out.push(b instanceof ArrayBuffer ? "ArrayBuffer:"+new Uint8Array(b).join(",") : typeof b);
+(async()=>{ out.push(await sendMessage({method:"later"})); })();
+class T { name="n"; key="k"; static sources={}; }
+T.sources.k = new T();
+out.push(Object.keys(T.sources).join());
+`
+	s, err := moejs.CompileScript("t.js", src)
+	if err != nil { t.Fatal(err) }
+	if err := loop.Run(func(rt *moejs.Runtime) error { _, err := rt.RunScript(s); return err }); err != nil { t.Fatal(err) }
+	fin, err := moejs.CompileScript("f.js", "JSON.stringify(out)")
+	if err != nil { t.Fatal(err) }
+	v, err := rt.RunScript(fin)
+	if err != nil { t.Fatal(err) }
+	t.Log("RESULT:", v.String())
+}
