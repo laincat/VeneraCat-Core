@@ -43,3 +43,27 @@ func TestURLPolyfillCoversWhatSourcesUse(t *testing.T) {
 		t.Fatalf("invalid input should throw, got %v", err)
 	}
 }
+
+// A source that edits the query through searchParams and then fetches u.search
+// has to get the edited query; in the browser the two are one value.
+func TestURLSearchAndSearchParamsAgree(t *testing.T) {
+	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	cases := []struct{ script, want string }{
+		{`(() => { const u = new URL("https://x.test/p?a=1"); u.searchParams.set("page", "2"); return u.search })()`, `"?a=1&page=2"`},
+		{`(() => { const u = new URL("https://x.test/p?a=1"); u.searchParams.delete("a"); return u.search })()`, `""`},
+		{`(() => { const u = new URL("https://x.test/p"); u.search = "?page=3"; return u.searchParams.get("page") })()`, `"3"`},
+		{`(() => { const u = new URL("https://x.test/p?a=1"); u.searchParams.set("page", "2"); return u.href })()`, `"https://x.test/p?a=1&page=2"`},
+	}
+	for _, c := range cases {
+		got, err := r.Eval(ctx, c.script)
+		if err != nil || string(got) != c.want {
+			t.Fatalf("%s: got %s, want %s, err %v", c.script, got, c.want, err)
+		}
+	}
+}

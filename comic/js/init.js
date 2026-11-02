@@ -845,9 +845,21 @@
       this.hostname = hasPort ? hostport.slice(0, portAt) : hostport;
       this.port = hasPort ? hostport.slice(portAt + 1) : '';
       this.pathname = absolute[3] || '/';
-      this.search = absolute[4] === undefined ? '' : '?' + absolute[4];
-      this.hash = absolute[5] === undefined ? '' : '#' + absolute[5];
       this.searchParams = new URLSearchParams(absolute[4] || '');
+      this.hash = absolute[5] === undefined ? '' : '#' + absolute[5];
+    }
+
+    // `search` and `searchParams` are one value in the browser: a source that
+    // does `u.searchParams.set("page", 2)` and then fetches `u.search` expects
+    // the new query, so the string is derived rather than stored separately.
+    get search() {
+      const query = this.searchParams.toString();
+      return query ? '?' + query : '';
+    }
+
+    set search(value) {
+      const text = String(value == null ? '' : value);
+      this.searchParams = new URLSearchParams(text.replace(/^\?/, ''));
     }
 
     get host() {
