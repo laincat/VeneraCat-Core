@@ -725,6 +725,157 @@
   }
 
   // ---------------------------------------------------------------------
+  // URL and URLSearchParams
+  // ---------------------------------------------------------------------
+  //
+  // The pinned engine has no URL class of its own, and one official source builds
+  // a Referer from `new URL(imageUrl).host` (falling back to a regex when it
+  // throws). A parser for the parts sources actually use is better than telling
+  // every author to write their own.
+  //
+  // What this is not: a full WHATWG URL. It handles absolute http(s) addresses,
+  // relative references against a base, and the usual accessors; it does not
+  // normalise percent escapes, resolve every edge of dot segments, or implement
+  // IDNA. A source that needs those has to do them itself.
+
+  function searchParamsOf(query) {
+    const pairs = [];
+    if (query) {
+      for (const part of query.split('&')) {
+        if (!part) continue;
+        const eq = part.indexOf('=');
+        const rawName = eq === -1 ? part : part.slice(0, eq);
+        const rawValue = eq === -1 ? '' : part.slice(eq + 1);
+        pairs.push([decodeQuery(rawName), decodeQuery(rawValue)]);
+      }
+    }
+    return pairs;
+  }
+
+  function decodeQuery(text) {
+    try { return decodeURIComponent(String(text).replace(/\+/g, ' ')); } catch (_) { return String(text); }
+  }
+
+  function encodeQuery(text) {
+    return encodeURIComponent(String(text)).replace(/%20/g, '+');
+  }
+
+  class URLSearchParams {
+    constructor(init) {
+      this._pairs = [];
+      if (init == null) return;
+      if (typeof init === 'string') {
+        this._pairs = searchParamsOf(init.replace(/^\?/, ''));
+      } else if (Array.isArray(init)) {
+        for (const pair of init) this._pairs.push([String(pair[0]), String(pair[1])]);
+      } else if (typeof init === 'object') {
+        for (const key of Object.keys(init)) this._pairs.push([key, String(init[key])]);
+      }
+    }
+
+    get(name) {
+      for (const [key, value] of this._pairs) if (key === String(name)) return value;
+      return null;
+    }
+
+    getAll(name) {
+      return this._pairs.filter(([key]) => key === String(name)).map(([, value]) => value);
+    }
+
+    has(name) {
+      return this._pairs.some(([key]) => key === String(name));
+    }
+
+    append(name, value) {
+      this._pairs.push([String(name), String(value)]);
+    }
+
+    set(name, value) {
+      const key = String(name);
+      const at = this._pairs.findIndex(([k]) => k === key);
+      if (at === -1) { this._pairs.push([key, String(value)]); return; }
+      this._pairs[at] = [key, String(value)];
+      this._pairs = this._pairs.filter(([k], i) => k !== key || i === at);
+    }
+
+    delete(name) {
+      this._pairs = this._pairs.filter(([key]) => key !== String(name));
+    }
+
+    sort() {
+      this._pairs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    }
+
+    forEach(fn, thisArg) {
+      for (const [key, value] of this._pairs) fn.call(thisArg, value, key, this);
+    }
+
+    toString() {
+      return this._pairs.map(([key, value]) => encodeQuery(key) + '=' + encodeQuery(value)).join('&');
+    }
+  }
+
+  const URL_PATTERN = /^([a-zA-Z][a-zA-Z0-9+.-]*:)(?:\/\/([^/?#]*))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/;
+
+  class URL {
+    constructor(input, base) {
+      const text = String(input);
+      const absolute = URL_PATTERN.exec(text);
+      if (!absolute) {
+        if (base === undefined) throw new TypeError('Invalid URL: ' + text);
+        const resolved = new URL(String(base), undefined);
+        const joined = text.startsWith('/')
+          ? resolved.protocol + '//' + resolved.host + text
+          : resolved.protocol + '//' + resolved.host + resolved.pathname.replace(/[^/]*$/, '') + text;
+        return new URL(joined, undefined);
+      }
+      this.protocol = absolute[1].toLowerCase();
+      const authority = absolute[2] || '';
+      const at = authority.lastIndexOf('@');
+      this.username = '';
+      this.password = '';
+      if (at !== -1) {
+        const credentials = authority.slice(0, at).split(':');
+        this.username = credentials[0] || '';
+        this.password = credentials[1] || '';
+      }
+      const hostport = at === -1 ? authority : authority.slice(at + 1);
+      const portAt = hostport.lastIndexOf(':');
+      const hasPort = portAt !== -1 && /^\d*$/.test(hostport.slice(portAt + 1));
+      this.hostname = hasPort ? hostport.slice(0, portAt) : hostport;
+      this.port = hasPort ? hostport.slice(portAt + 1) : '';
+      this.pathname = absolute[3] || '/';
+      this.search = absolute[4] === undefined ? '' : '?' + absolute[4];
+      this.hash = absolute[5] === undefined ? '' : '#' + absolute[5];
+      this.searchParams = new URLSearchParams(absolute[4] || '');
+    }
+
+    get host() {
+      return this.port ? this.hostname + ':' + this.port : this.hostname;
+    }
+
+    get origin() {
+      return this.protocol + '//' + this.host;
+    }
+
+    get href() {
+      const credentials = this.username
+        ? this.username + (this.password ? ':' + this.password : '') + '@'
+        : '';
+      const query = this.searchParams.toString();
+      return this.protocol + '//' + credentials + this.host + this.pathname
+        + (query ? '?' + query : '') + this.hash;
+    }
+
+    toString() { return this.href; }
+    toJSON() { return this.href; }
+  }
+
+  URL.canParse = function (input, base) {
+    try { new URL(input, base); return true; } catch (_) { return false; }
+  };
+
+  // ---------------------------------------------------------------------
   // publish the globals
   // ---------------------------------------------------------------------
 
@@ -756,6 +907,8 @@
     UI,
     Image,
     ComicSource,
+    URL,
+    URLSearchParams,
   };
   for (const name of Object.keys(GLOBALS)) publish(name, GLOBALS[name]);
 })(globalThis);
