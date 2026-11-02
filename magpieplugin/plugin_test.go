@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -54,7 +55,11 @@ func copilotPluginBundle(t *testing.T) *Bundle {
 		"endpoints.mjs": "copilot-endpoints.mjs",
 		"usage.mjs":     "copilot-usage.mjs",
 	} {
-		body, err := os.ReadFile("E:/Temp/nkprobe/magpie-community-audit/" + src)
+		dir := auditDir()
+		if dir == "" {
+			t.Skip(magpieAuditEnv + " is not set: no audit fixtures to load")
+		}
+		body, err := os.ReadFile(filepath.Join(dir, src))
 		if err != nil {
 			t.Skip("audit fixtures not present:", err)
 		}

@@ -79,7 +79,11 @@ func copilotFiles(t *testing.T) string {
 		"endpoints.mjs": "copilot-endpoints.mjs",
 		"usage.mjs":     "copilot-usage.mjs",
 	} {
-		body, err := os.ReadFile("E:/Temp/nkprobe/magpie-community-audit/" + src)
+		dir := strings.TrimSpace(os.Getenv("MAGPIE_AUDIT_DIR"))
+		if dir == "" {
+			t.Skip("MAGPIE_AUDIT_DIR is not set: no audit fixtures to load")
+		}
+		body, err := os.ReadFile(filepath.Join(dir, src))
 		if err != nil {
 			t.Skip("audit fixtures not present:", err)
 		}

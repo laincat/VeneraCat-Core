@@ -7,9 +7,27 @@ import (
 	"testing"
 )
 
-// communityAuditDir holds audit copies of community packages. They are MIT but
-// not vendored into this repository, so a checkout without them skips.
-const communityAuditDir = "E:/Temp/nkprobe/magpie-community-audit"
+// magpieAuditEnv names the directory holding audit copies of community packages.
+// They are MIT but not vendored into this repository, so a checkout without them
+// skips. An environment variable rather than a fixed path: the previous Windows
+// path made every one of these cases skip on macOS without saying why.
+const magpieAuditEnv = "MAGPIE_AUDIT_DIR"
+
+// auditDir returns the audit directory, or "" when the environment does not name
+// one. Tests skip in that case instead of silently reading another machine's
+// temporary directory.
+func auditDir() string { return strings.TrimSpace(os.Getenv(magpieAuditEnv)) }
+
+// communityBundle loads one audited package, or skips when the environment does
+// not point at the audit copies.
+func communityBundle(t *testing.T, name string) *Bundle {
+	t.Helper()
+	dir := auditDir()
+	if dir == "" {
+		t.Skip(magpieAuditEnv + " is not set: no audit fixtures to load")
+	}
+	return bundleFromDir(t, filepath.Join(dir, name))
+}
 
 // communityPackages is what happened when each package from the community
 // repository's "no Node built-ins" shortlist was actually loaded. The static
@@ -81,7 +99,7 @@ func bundleFromDir(t *testing.T, dir string) *Bundle {
 func TestCommunityPackagesBehaveAsRecorded(t *testing.T) {
 	for _, c := range communityPackages {
 		t.Run(c.name, func(t *testing.T) {
-			b := bundleFromDir(t, filepath.Join(communityAuditDir, c.name))
+			b := bundleFromDir(t, filepath.Join(auditDir(), c.name))
 			loader, err := Load(b)
 			if c.wantErr != "" {
 				if err == nil {

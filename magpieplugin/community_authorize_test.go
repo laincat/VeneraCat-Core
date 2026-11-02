@@ -2,7 +2,6 @@ package magpieplugin
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,7 +12,7 @@ import (
 // produces a URL with a placeholder in it, which fails much later and looks like
 // a network problem.
 func TestCloudflareAPIKeySignsInAtOnce(t *testing.T) {
-	b := bundleFromDir(t, filepath.Join(communityAuditDir, "cloudflare-workers-ai"))
+	b := communityBundle(t, "cloudflare-workers-ai")
 	loader, err := Load(b)
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +48,7 @@ func TestCloudflareAPIKeySignsInAtOnce(t *testing.T) {
 // A key-based method declares the fields to ask for. Without them a client has
 // nowhere to type the key, and the package looks broken rather than unsigned-in.
 func TestCloudflareMethodDeclaresItsPrompts(t *testing.T) {
-	b := bundleFromDir(t, filepath.Join(communityAuditDir, "cloudflare-workers-ai"))
+	b := communityBundle(t, "cloudflare-workers-ai")
 	loader, err := Load(b)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +114,7 @@ func (h *cloudflareRecorder) Do(_ context.Context, req *Request) (*Response, err
 // it into its base URL. A key stored without it leaves a URL with a placeholder
 // in it, and the failure surfaces much later as a network error.
 func TestCloudflareKeyChatUsesTheAccountId(t *testing.T) {
-	b := bundleFromDir(t, filepath.Join(communityAuditDir, "cloudflare-workers-ai"))
+	b := communityBundle(t, "cloudflare-workers-ai")
 	loader, err := Load(b)
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +175,7 @@ func TestCloudflareKeyChatUsesTheAccountId(t *testing.T) {
 // sees. A refusal must be an error naming the status, not an empty list that
 // looks like "this account has no models".
 func TestCloudflareModelsComeFromTheVendorOrFailLoudly(t *testing.T) {
-	b := bundleFromDir(t, filepath.Join(communityAuditDir, "cloudflare-workers-ai"))
+	b := communityBundle(t, "cloudflare-workers-ai")
 	loader, err := Load(b)
 	if err != nil {
 		t.Fatal(err)
