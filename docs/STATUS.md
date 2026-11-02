@@ -96,6 +96,14 @@
 
 - gomobile 侧是 `Core.ModifyImage(key, script, width, height, rgbaB64)` → `{"width","height","rgba"}`:像素以 base64 过边界(二进制可跨 gomobile),解码与编码由调用方做,「脚本没给出图像」单独报 `ErrModifyImage`,与「脚本本身抛错」区分开。
 
+## macOS 全套包测试(2026-11-03,提交 `44f1952`)
+
+同一提交在 macOS `darwin/arm64`、`go1.27.3`、`CGO_ENABLED=1` 上执行:`go vet ./...`、`gofmt -l .`、`./scripts/check-docs.sh` 均通过;`go test -race -v ./comic/js ./magpieplugin ./mobile` 退出 0,顶层 **249 PASS / 0 FAIL / 31 SKIP**。日志在 `/tmp/venera-core-44f1952-evidence/`(`vet.log`、`race.log`、`test-summary.log`、`gofmt.log`、`docs.log`)。
+
+关键覆盖(均为假传输/假宿主):Promise 与多次 `await`、超时中断后可恢复、调用开始前取消、关闭会话取消进行中与后续调用、宿主 panic/取消/取消传到传输层;跨源隔离、备份 Cookie 分区命名、漫画与 Magpie 请求使用不同宿主 ID;Magpie 的 fetch 解析、AbortSignal 取消、分块流式到达、流失败上报、顺序与消费端停止/客户端失败/取消;mobile 的插件生命周期、设置/搜索选项/浏览页/网页登录 JSON、`9007199254740993` 精确字节不经过浮点舍入、取消到达同一宿主请求。新增的两条兼容边界用例(`TestCompatibilityReadOnlyAtob`、`TestCompatibilityCallRegisterWindow`)也在其中。
+
+31 项 SKIP 不是通过:缺少 `magpie-community-audit` 审计插件目录(夹具路径写死在 Windows 临时目录),以及 `VC_WNACG_JS`、`MAGPIE_VENDOR_DIR` 未设置;对应真实 Copilot、Cloudflare 与社区插件夹具。本轮未伪造数据、未重复运行这些用例。这些结果只覆盖假传输与 loopback,不代表真实站点、真实账号或设备闭环;客户端 pin 未变。
+
 ## 已复现的 MoeJS 兼容边界(2026-11-02)
 
 通过 Core 公开 `Runtime.Eval` 入口复现当前固定引擎 `0a0ed36ae7db` 的两类限制,并加入 `comic/js/compatibility_limits_test.go` 的两条测试。两条测试均在 Windows 的 `go test -race` 中通过,日志 `E:/Temp/core-compatibility-limits-tests.log`;独立复现输出在 `E:/Temp/core-compatibility-limits-repro.log`。

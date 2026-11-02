@@ -95,6 +95,14 @@ Real-source evidence (desktop `scripts/callback-probe.sh`): ten callbacks across
 
 - gomobile exposes `Core.ModifyImage(key, script, width, height, rgbaB64)` answering `{"width","height","rgba"}`: pixels cross as base64 (binary survives gomobile), the caller decodes and encodes, and "the script produced no image" is reported as `ErrModifyImage`, apart from the script itself throwing.
 
+## macOS package test run (2026-11-03, commit `44f1952`)
+
+The same commit ran on macOS `darwin/arm64`, `go1.27.3`, `CGO_ENABLED=1`: `go vet ./...`, `gofmt -l .` and `./scripts/check-docs.sh` pass; `go test -race -v ./comic/js ./magpieplugin ./mobile` exits 0 with **249 PASS / 0 FAIL / 31 SKIP** at the top level. Logs are in `/tmp/venera-core-44f1952-evidence/` (`vet.log`, `race.log`, `test-summary.log`, `gofmt.log`, `docs.log`).
+
+Key coverage (all with fake transports/hosts): promises and repeated `await`, recovery after a timeout interrupt, cancellation before a call starts, closing a session cancelling active and future calls, host panic/cancellation and cancellation reaching the transport; cross-source isolation, backup cookie partition naming, and distinct host IDs for comic and Magpie requests; Magpie fetch parsing, AbortSignal cancellation, chunked streaming arrival, stream failure reporting, ordering, consumer stop, client failure and cancellation; mobile plugin lifecycle, settings/search-option/explore/webview-login JSON, exact bytes for `9007199254740993` without float rounding, and cancellation reaching the same host request. The two new compatibility-boundary cases (`TestCompatibilityReadOnlyAtob`, `TestCompatibilityCallRegisterWindow`) are included.
+
+The 31 SKIPs are not passes: the `magpie-community-audit` fixture directory is absent (its path was hard-coded to a Windows temporary directory), and `VC_WNACG_JS` / `MAGPIE_VENDOR_DIR` are unset; these cover real Copilot, Cloudflare and community plugin fixtures. No data was fabricated and those cases were not rerun. These results cover fake transports and loopback only, not live sites, real accounts or devices; the client pins are unchanged.
+
 ## Reproduced MoeJS compatibility boundaries (2026-11-02)
 
 The public Core `Runtime.Eval` entry point reproduces two limits of pinned engine `0a0ed36ae7db`, covered by two tests in `comic/js/compatibility_limits_test.go`. Both pass under Windows `go test -race` (`E:/Temp/core-compatibility-limits-tests.log`); standalone output is in `E:/Temp/core-compatibility-limits-repro.log`.
