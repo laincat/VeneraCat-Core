@@ -118,7 +118,9 @@ Loaded the official v2 scripts through the public `comic/js` entry point to look
 
 Result: with storage, a cookie store and a transport, **32/34 load completely** (key, kind, version and minAppVersion recorded). The other two fail because the probe's single canned body does not match their `init()`: `comic_walker` parses a token JSON and `jm` parses page HTML. `shonen_jump_plus` passed precisely because of that canned HTML, so this is a fixture problem, not an engine problem.
 
-So this round found **no new JavaScript compatibility gap**: class fields, getters, `randomInt`, `loadData` and `Network.get` inside `init()` all work. Limits: only load time is covered, not each method's real network behaviour; `comic_walker` and `jm` were not rechecked against their live sites; dedicated register-window and frozen-`atob` cases are now recorded above and remain separate from this load sweep.
+The 2026-11-03 rerun replaced that single body with per-request shapes: the iTunes lookup and the `jm` setting endpoint answer JSON, everything else answers HTML. **33/34 now load completely**, including `comic_walker` (key `comic_walker`, version `1.0.1`, minAppVersion `1.6.0`). `jm` still fails, and not because of the engine: its `init()` calls its own setting endpoint and decrypts the body with an AES key derived from the request time plus a fixed secret, so an offline stub cannot produce a body for that second. The failure surfaces as a JavaScript exception (`js: jm init failed: ...`), which shows the load-time error path works. Log: `E:/Temp/core-srcs-sweep-34.log`.
+
+So this round found **no new JavaScript compatibility gap**: class fields, getters, `randomInt`, `loadData` and `Network.get` inside `init()` all work. Limits: only load time is covered, not each method's real network behaviour; `jm`'s `init()` needs a live response and was not rechecked online; dedicated register-window and frozen-`atob` cases are now recorded above and remain separate from this load sweep.
 
 ## Security review (2026-10-29)
 

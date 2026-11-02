@@ -119,7 +119,9 @@
 
 结果:提供存储 + Cookie 存储 + 传输后,**32/34 完整加载**(记录 key、kind、version、minAppVersion);其余两份失败的原因是探针给的固定响应体不匹配它们的 `init()`:`comic_walker` 的 `init()` 解析 token JSON,`jm` 的 `init()` 解析页面 HTML。同一轮里 `shonen_jump_plus` 正是靠探针返回的 HTML 才通过,说明这是夹具问题,不是引擎问题。
 
-因此本轮**没有发现新的 JS 兼容缺口**:类字段、getter、`randomInt`、`loadData`、`init()` 内的 `Network.get` 都正常。限制:只覆盖加载期,不覆盖各方法的真实网络行为;`comic_walker`/`jm` 的 `init()` 在真实站点上未复验;register 窗口与冻结 `atob` 的专门用例已在上一节补齐,仍不属于这次源加载巡检的覆盖范围。
+2026-11-03 复跑时把探针从「固定响应体」改成「按请求给形状」:iTunes 查询返回 JSON,`jm` 的设置端点返回 JSON,其余仍返回 HTML。这一轮 **33/34 完整加载**,`comic_walker` 通过(key `comic_walker`、version `1.0.1`、minAppVersion `1.6.0`);`jm` 仍失败,原因是它的 `init()` 调用自己的设置端点,并用「请求时间 + 固定密钥」派生的 AES 密钥解密响应体——离线桩无法预知那一秒的时间戳,因此它在无网络时本来就无法完成 `init()`,不是引擎缺口。失败以 JS 异常形式上抛(`js: jm init failed: ...`),说明加载期的错误传播链路正常。日志:`E:/Temp/core-srcs-sweep-34.log`。
+
+因此本轮**没有发现新的 JS 兼容缺口**:类字段、getter、`randomInt`、`loadData`、`init()` 内的 `Network.get` 都正常。限制:只覆盖加载期,不覆盖各方法的真实网络行为;`jm` 的 `init()` 需要真实站点响应,未在联网环境复验;register 窗口与冻结 `atob` 的专门用例已在上一节补齐,仍不属于这次源加载巡检的覆盖范围。
 
 ## 安全审查(2026-10-29)
 
