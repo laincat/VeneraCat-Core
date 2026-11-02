@@ -2,6 +2,8 @@
 
 [English](README.en.md) | 简体中文
 
+<img src="Assets/brand/veneracat-core-logo.png" alt="veneracat-core" width="720">
+
 Nekularity(iOS/iPadOS)与 Nekophage(桌面)共用的核心库,使用 Go 编写,许可证为 GPL-3.0-or-later。
 
 ## 功能
