@@ -95,13 +95,22 @@ Real-source evidence (desktop `scripts/callback-probe.sh`): ten callbacks across
 
 - gomobile exposes `Core.ModifyImage(key, script, width, height, rgbaB64)` answering `{"width","height","rgba"}`: pixels cross as base64 (binary survives gomobile), the caller decodes and encodes, and "the script produced no image" is reported as `ErrModifyImage`, apart from the script itself throwing.
 
+## Reproduced MoeJS compatibility boundaries (2026-11-02)
+
+The public Core `Runtime.Eval` entry point reproduces two limits of pinned engine `0a0ed36ae7db`, covered by two tests in `comic/js/compatibility_limits_test.go`. Both pass under Windows `go test -race` (`E:/Temp/core-compatibility-limits-tests.log`); standalone output is in `E:/Temp/core-compatibility-limits-repro.log`.
+
+- Global `atob` is non-writable and non-configurable. Strict assignment throws `TypeError`; sloppy assignment is ignored and `atob("QQ==")` still returns `A`, so absence of an exception does not establish a custom decoder was installed. A function-local decoder works without changing the global.
+- A minimal call expression accepts 254 literal arguments; 255 triggers `function needs more than 256 registers`, and 256 triggers `too many arguments`. This is a 256-register compiler window per function, including callee/this and other local values, not a promise that every context accepts 254 arguments. Dynamic array spread passes 1000 arguments, and the earlier compile errors leave the next call usable.
+
+This round explicitly records and retains the pinned engine's behavior. Source scripts should use local/own decoders and array spread or smaller functions for large literal calls; Core does not rewrite scripts automatically. Production code, the engine dependency and both client pins are unchanged. These cases establish those boundaries, not every live site's methods.
+
 ## Official script load sweep (2026-11-02)
 
 Loaded the official v2 scripts through the public `comic/js` entry point to look for engine gaps at load time. The probe lives outside the repository (`E:/Temp/gosrcprobe`, with a `replace` to this checkout) and is not a test case; the scripts are the 34 files in `E:/Temp/nkprobe/official-srcs`.
 
 Result: with storage, a cookie store and a transport, **32/34 load completely** (key, kind, version and minAppVersion recorded). The other two fail because the probe's single canned body does not match their `init()`: `comic_walker` parses a token JSON and `jm` parses page HTML. `shonen_jump_plus` passed precisely because of that canned HTML, so this is a fixture problem, not an engine problem.
 
-So this round found **no new JavaScript compatibility gap**: class fields, getters, `randomInt`, `loadData` and `Network.get` inside `init()` all work. Limits: only load time is covered, not each method's real network behaviour; `comic_walker` and `jm` were not rechecked against their live sites; the known register limit and frozen `atob` need dedicated cases and were not part of this sweep.
+So this round found **no new JavaScript compatibility gap**: class fields, getters, `randomInt`, `loadData` and `Network.get` inside `init()` all work. Limits: only load time is covered, not each method's real network behaviour; `comic_walker` and `jm` were not rechecked against their live sites; dedicated register-window and frozen-`atob` cases are now recorded above and remain separate from this load sweep.
 
 ## Security review (2026-10-29)
 

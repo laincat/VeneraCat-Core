@@ -96,13 +96,22 @@
 
 - gomobile 侧是 `Core.ModifyImage(key, script, width, height, rgbaB64)` → `{"width","height","rgba"}`:像素以 base64 过边界(二进制可跨 gomobile),解码与编码由调用方做,「脚本没给出图像」单独报 `ErrModifyImage`,与「脚本本身抛错」区分开。
 
+## 已复现的 MoeJS 兼容边界(2026-11-02)
+
+通过 Core 公开 `Runtime.Eval` 入口复现当前固定引擎 `0a0ed36ae7db` 的两类限制,并加入 `comic/js/compatibility_limits_test.go` 的两条测试。两条测试均在 Windows 的 `go test -race` 中通过,日志 `E:/Temp/core-compatibility-limits-tests.log`;独立复现输出在 `E:/Temp/core-compatibility-limits-repro.log`。
+
+- 全局 `atob` 的属性不可写、不可配置。严格模式赋值抛出 `TypeError`;非严格赋值被忽略,随后 `atob("QQ==")` 仍返回 `A`,不能以“不抛错”判断自定义解码器安装成功。函数局部的同名解码器可用,且不改变全局解码器。
+- 最小调用表达式接受 254 个字面量实参;255 个触发 `function needs more than 256 registers`,256 个触发 `too many arguments`。这是单函数 256 个编译寄存器的窗口,包含 callee/this 和其他局部值,不能承诺所有上下文都支持 254 个实参。用动态数组展开传入 1000 个实参通过,且前面的编译错误没有破坏下一次调用。
+
+本轮选择明确记录并保留固定引擎的行为。源脚本应使用局部/自有解码函数,大字面量调用改为数组展开或拆分函数;Core 不自动重写脚本。没有修改生产代码、引擎依赖或两端 pin。这些用例只说明上述边界,不代表所有真实站点方法已验证。
+
 ## 官方脚本加载巡检(2026-11-02)
 
 用 `comic/js` 的公开入口跑一遍官方 v2 脚本,确认引擎在加载期没有兼容缺口。探针在仓库外(`E:/Temp/gosrcprobe`,以 `replace` 指向本仓库),不是测试用例;脚本来自 `E:/Temp/nkprobe/official-srcs` 的 34 份。
 
 结果:提供存储 + Cookie 存储 + 传输后,**32/34 完整加载**(记录 key、kind、version、minAppVersion);其余两份失败的原因是探针给的固定响应体不匹配它们的 `init()`:`comic_walker` 的 `init()` 解析 token JSON,`jm` 的 `init()` 解析页面 HTML。同一轮里 `shonen_jump_plus` 正是靠探针返回的 HTML 才通过,说明这是夹具问题,不是引擎问题。
 
-因此本轮**没有发现新的 JS 兼容缺口**:类字段、getter、`randomInt`、`loadData`、`init()` 内的 `Network.get` 都正常。限制:只覆盖加载期,不覆盖各方法的真实网络行为;`comic_walker`/`jm` 的 `init()` 在真实站点上未复验;已知的 register 上限与冻结 `atob` 需要专门的用例,不在这次巡检范围内。
+因此本轮**没有发现新的 JS 兼容缺口**:类字段、getter、`randomInt`、`loadData`、`init()` 内的 `Network.get` 都正常。限制:只覆盖加载期,不覆盖各方法的真实网络行为;`comic_walker`/`jm` 的 `init()` 在真实站点上未复验;register 窗口与冻结 `atob` 的专门用例已在上一节补齐,仍不属于这次源加载巡检的覆盖范围。
 
 ## 安全审查(2026-10-29)
 
