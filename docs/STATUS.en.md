@@ -103,6 +103,8 @@ Key coverage (all with fake transports/hosts): promises and repeated `await`, re
 
 The 31 SKIPs are not passes: the audit fixture directory is absent, and `VC_WNACG_JS` / `MAGPIE_VENDOR_DIR` are unset; these cover real Copilot, Cloudflare and community plugin fixtures. The audit directory used to be hard-coded to a Windows temporary path, so those cases skipped on macOS with no hint; `MAGPIE_AUDIT_DIR` now names it and an unset variable skips explicitly. Rerun on Windows on 2026-11-03 with both variables pointing at real fixtures (`magpieplugin` + `mobile`): **224 PASS / 0 FAIL / 0 SKIP**, log `E:/Temp/core-full-with-fixtures.log`.
 
+A local pass of `go test -race ./...` across all 22 packages with `MAGPIE_AUDIT_DIR` and `MAGPIE_VENDOR_DIR` set also succeeded after `b2610a5` (`E:/Temp/core-race-all-jsname.log`).
+
 CI at `4d4b8fb` (which contains the async error-name fix from `b2610a5`) is green in all four jobs: the three Go platforms and `Apple (xcframework + Swift smoke test)`. The Apple job was cancelled after 15 minutes in the queue without running a single step, and `gh run rerun --job` made it pass; that cancellation is a queue problem rather than a compile failure, so rerun before reading it as red.
 
 CI at `63787bc` is green in all four jobs: `Go (windows-latest)`, `Go (macos-26)`, `Go (ubuntu-latest)` and `Apple (xcframework + Swift smoke test)` (run `41507032435`). The macOS job on the previous commit `8e301cf` shows as cancelled because the next push cancelled it under the concurrency policy, not because it failed — Windows and Linux passed there and the Apple job was skipped, which is recorded here so a cancellation is not read as red.
