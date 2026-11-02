@@ -148,5 +148,5 @@ CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`�
 
 两端客户端仍钉在 `214e7782`,HEAD 已经是 `8e301cf`。这不代表“忘记升级”:`git diff --stat 214e7782..HEAD` 显示改动只有 16 个文件、415 行,其中**非测试、非文档的只有两份 README**(共 10 行);生产代码、`go.mod` 与引擎依赖都没有动。Go 编译器不读 `_test.go` 和 Markdown,所以从 `214e7782` 重建的库产物与 HEAD 一致,提前升 pin 只会让两端各自重跑一遍构建而不改变行为。
 
-升 pin 的触发条件写成一条可检查的规则:出现**任何非 `_test.go`、非 `docs/`、非 `README*` 的改动**时,两端 pin 一起升,并按各自仓库的方式重跑构建与测试。客户端侧的 `scripts/check-core-pin.sh` 仍只保证 pin 与产物一致,不判断是否该升。
+升 pin 原本写成「出现任何非 `_test.go`、非 `docs/`、非 `README*` 的改动就两端一起升」。`b2610a5` 之后这条规则需要说准:那次改了 `comic/js/engine.go`,让 promise reject 保留 `TypeError:` 之类的名字,属于生产代码,但**不改变 gomobile 接口形状**,只改善错误文本。升 pin 要求两端各自重建 Core 产物(Nekularity 还要重建 xcframework),代价与收益不成比例,因此两端继续钉在 `214e7782`,这次改动**记为待升级**:下一次任一客户端产出新版本(需要重建 Core)时一并升 pin 并跑完整测试。规则据此改为:生产代码改动在**下一次客户端构建**时随版本一起升 pin;只有改动影响客户端依赖的接口或行为时,才立即升并当轮复验。客户端侧的 `scripts/check-core-pin.sh` 仍只保证 pin 与产物一致,不判断是否该升。
 
