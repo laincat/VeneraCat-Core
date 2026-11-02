@@ -136,3 +136,10 @@ An independent review found 12 issues (4 high, 5 medium, 3 low), **all fixed wit
 4. Video download and offline cache, danmaku, Bangumi: not done (second phase).
 5. AniBaka `anx-rule/2` pipeline rules: not done (second phase).
 6. **Wire chunked transport into the clients**: both the Core-side bridge and the package bridge now work (the deadlock is fixed, see above), but no client implements `HostStream` yet, so iOS and the desktop still get whole replies. The next step is for iOS and the desktop each to implement `streamOpen` / `streamNext` / `streamClose`, and to move the Core pin forward to a commit that contains this fix.
+
+## What justifies the client pin (2026-11-03)
+
+Both clients still pin `214e7782` while HEAD is `8e301cf`. That is not a forgotten bump: `git diff --stat 214e7782..HEAD` shows 16 files and 415 lines, and the only changes outside tests and docs are the two READMEs (10 lines); production code, `go.mod` and the engine dependency are untouched. The Go compiler does not read `_test.go` files or Markdown, so a library built at `214e7782` is the same library as one built at HEAD, and bumping early would only make both clients rerun their builds without changing behaviour.
+
+The trigger for a bump is therefore a checkable rule: **any change outside `_test.go`, `docs/` and `README*`** means both pins move together and each client reruns its build and tests. `scripts/check-core-pin.sh` on the client side only keeps a pin consistent with the artifact; it does not decide whether to move it.
+
