@@ -104,6 +104,8 @@
 
 31 项 SKIP 不是通过:缺少审计插件夹具目录,以及 `VC_WNACG_JS`、`MAGPIE_VENDOR_DIR` 未设置;对应真实 Copilot、Cloudflare 与社区插件夹具。审计目录此前写死成 Windows 临时路径,导致这些用例在 macOS 上毫无提示地跳过;现在改由 `MAGPIE_AUDIT_DIR` 指定,未设置时明确跳过。2026-11-03 在 Windows 上把两个变量都指向真实夹具后复跑(`magpieplugin` + `mobile`):**224 PASS / 0 FAIL / 0 SKIP**,日志 `E:/Temp/core-full-with-fixtures.log`。
 
+`4d4b8fb`(含 `b2610a5` 的异步错误名修复)CI 四作业全绿:三个 Go 平台与 `Apple (xcframework + Swift smoke test)`。Apple 作业第一次在队列里等了 15 分钟后被取消(没有任何步骤运行),`gh run rerun --job` 重跑后通过——这种取消是排队问题,不是编译失败,遇到时先重跑再判断。
+
 CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`、`Go (ubuntu-latest)` 与 `Apple (xcframework + Swift smoke test)`(run `41507032435`)。上一提交 `8e301cf` 的 macOS 作业显示为 cancelled,是被紧随其后的推送按并发策略取消,不是失败——Windows 与 Linux 当时都通过,Apple 作业因此跳过;这一点写在这里,免得把「被取消」当成红。
 
 2026-11-03 在 `6a66759` 上又跑了一遍:不带夹具变量 `go test ./...` 共 22 个包全过(相关用例按设计跳过);带上 `MAGPIE_AUDIT_DIR` 与 `MAGPIE_VENDOR_DIR` 时 `magpieplugin`、`mobile`、`comic/js` 三个包也全过,日志 `E:/Temp/core-go-test-all-6a66759.log`。
