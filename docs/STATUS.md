@@ -148,6 +148,15 @@ CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`�
 5. AniBaka `anx-rule/2` 流水线规则:未做(第二阶段)。
 6. **把分段传输接进客户端**:Core 侧的分段桥与包桥都通了(死锁已修,见上),客户端还没有实现 `HostStream`,所以 iOS 与桌面端目前仍整包返回。下一步是让 iOS 与桌面各实现一次 `streamOpen`/`streamNext`/`streamClose`,并把 Core 的 pin 提到含这次修复的提交。
 
+## pin 维护结果(2026-11-03)
+
+两端都已经从 `214e7782` 升到 `8e14aad`:`b2610a5` 的「待升级」到此关闭。
+
+- **Nekularity**:随 `0.3.0`(build 12)发布,tag `v0.3.0`;解包 IPA 后能在应用二进制里读到 `8e14aade75f563a95f50d4ec80be27bae0d02c63`,CI `41525488814` 的 411 例全过。
+- **Nekophage**:本地重打并复验——`go test -race ./...` **16 个包**全过、`scripts/check.sh` 通过、窗口套件 **14 PASS / 0 FAIL / 0 SKIP**,`-version` 自报同一 pin。
+
+两边升 pin 时都先确认了 `214e7782..8e14aad` 之间只有 `comic/js/engine.go` 一个生产文件改动、`apple/` 下没有 Swift 表面变化,所以差异只体现在错误文案。下一次出现 Core 生产改动时,仍按「随下一次客户端构建升 pin」的规则走。
+
 ## 客户端 pin 的判定依据(2026-11-03)
 
 两端客户端仍钉在 `214e7782`,HEAD 已经是 `8e301cf`。这不代表“忘记升级”:`git diff --stat 214e7782..HEAD` 显示改动只有 16 个文件、415 行,其中**非测试、非文档的只有两份 README**(共 10 行);生产代码、`go.mod` 与引擎依赖都没有动。Go 编译器不读 `_test.go` 和 Markdown,所以从 `214e7782` 重建的库产物与 HEAD 一致,提前升 pin 只会让两端各自重跑一遍构建而不改变行为。
