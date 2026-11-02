@@ -147,6 +147,15 @@ An independent review found 12 issues (4 high, 5 medium, 3 low), **all fixed wit
 5. AniBaka `anx-rule/2` pipeline rules: not done (second phase).
 6. **Wire chunked transport into the clients**: both the Core-side bridge and the package bridge now work (the deadlock is fixed, see above), but no client implements `HostStream` yet, so iOS and the desktop still get whole replies. The next step is for iOS and the desktop each to implement `streamOpen` / `streamNext` / `streamClose`, and to move the Core pin forward to a commit that contains this fix.
 
+## Where the pins ended up (2026-11-03)
+
+Both clients moved from `214e7782` to `8e14aad`, which closes the "pending upgrade" note for `b2610a5`.
+
+- **Nekularity**: shipped in `0.3.0` (build 12), tag `v0.3.0`; unpacking the IPA finds `8e14aade75f563a95f50d4ec80be27bae0d02c63` inside the app binary, and CI `41525488814` passed all 411 tests.
+- **Nekophage**: rebuilt and re-verified locally — `go test -race ./...` passes in **all 16 packages**, `scripts/check.sh` passes, the window suite is **14 PASS / 0 FAIL / 0 SKIP**, and `-version` reports the same pin.
+
+Both bumps came after confirming that only `comic/js/engine.go` changed in production between `214e7782` and `8e14aad` and that nothing under `apple/` moved, so the difference is error text. The next production change in Core follows the same rule: roll it into the next client build.
+
 ## What justifies the client pin (2026-11-03)
 
 Both clients still pin `214e7782` while HEAD is `8e301cf`. That is not a forgotten bump: `git diff --stat 214e7782..HEAD` shows 16 files and 415 lines, and the only changes outside tests and docs are the two READMEs (10 lines); production code, `go.mod` and the engine dependency are untouched. The Go compiler does not read `_test.go` files or Markdown, so a library built at `214e7782` is the same library as one built at HEAD, and bumping early would only make both clients rerun their builds without changing behaviour.
