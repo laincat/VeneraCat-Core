@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/MoeForge/moejs"
@@ -326,10 +327,20 @@ func (e *ScriptError) Error() string { return "js: " + e.Message }
 
 func jsError(rt *moejs.Runtime, v moejs.Value) error {
 	msg := v.String()
+	name := ""
 	if v.IsObject() {
 		if m, err := rt.Get(v, "message"); err == nil && !m.IsUndefined() {
 			msg = m.String()
 		}
+		// An Error object's name is what turns "Cannot read properties of null"
+		// into "TypeError: ...". The message alone reads like a source's own
+		// complaint; the name says the engine rejected the script.
+		if n, err := rt.Get(v, "name"); err == nil && !n.IsUndefined() && n.String() != "Error" {
+			name = n.String()
+		}
+	}
+	if name != "" && !strings.HasPrefix(msg, name+":") {
+		msg = name + ": " + msg
 	}
 	e := &ScriptError{Message: msg}
 	if v.IsObject() {

@@ -117,6 +117,8 @@ CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`�
 - 全局 `atob` 的属性不可写、不可配置。严格模式赋值抛出 `TypeError`;非严格赋值被忽略,随后 `atob("QQ==")` 仍返回 `A`,不能以“不抛错”判断自定义解码器安装成功。函数局部的同名解码器可用,且不改变全局解码器。
 - 最小调用表达式接受 254 个字面量实参;255 个触发 `function needs more than 256 registers`,256 个触发 `too many arguments`。这是单函数 256 个编译寄存器的窗口,包含 callee/this 和其他局部值,不能承诺所有上下文都支持 254 个实参。用动态数组展开传入 1000 个实参通过,且前面的编译错误没有破坏下一次调用。
 
+同轮修了一处错误文本:promise reject 是以值的形式送回来的,`jsError` 原先只取 `message`,把对象上的 `name` 丢了——所以异步 `init()` 里的类型错误显示成 `Cannot read properties of null (reading 'length')`,而同步抛错却是 `TypeError: ...`。现在对象名会补回到消息前(名为 `Error` 时不加,抛字符串时也不加),日志 `E:/Temp/core-desc-probe.log`;新增用例 `TestAsyncRejectionsKeepTheErrorName` 覆盖异步类型错误、字符串抛出与同步抛出三种情况,`go vet ./...` 与带夹具的 `go test ./...` 22 个包全过。
+
 本轮选择明确记录并保留固定引擎的行为。源脚本应使用局部/自有解码函数,大字面量调用改为数组展开或拆分函数;Core 不自动重写脚本。没有修改生产代码、引擎依赖或两端 pin。这些用例只说明上述边界,不代表所有真实站点方法已验证。
 
 ## 官方脚本加载巡检(2026-11-02)

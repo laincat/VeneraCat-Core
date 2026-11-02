@@ -64,3 +64,31 @@ func TestCompatibilityCallRegisterWindow(t *testing.T) {
 		t.Fatalf("1000 spread arguments after compile errors: got %s, err %v", got, err)
 	}
 }
+
+// A promise rejection is delivered as a value, and only the value's message used
+// to survive: "Cannot read properties of null" without the TypeError in front of
+// it. A source author reading that has no way to tell an engine TypeError from a
+// sentence their own code produced.
+func TestAsyncRejectionsKeepTheErrorName(t *testing.T) {
+	r, err := New(Options{}, Services{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	_, err = r.Eval(ctx, `(async () => { const x = null; return x.length })()`)
+	if err == nil || !strings.Contains(err.Error(), "TypeError: Cannot read properties") {
+		t.Fatalf("async rejection = %v", err)
+	}
+	// A thrown string has no name; it must not grow one.
+	_, err = r.Eval(ctx, `(async () => { throw "plain refusal" })()`)
+	if err == nil || !strings.Contains(err.Error(), "plain refusal") || strings.Contains(err.Error(), "Error: ") {
+		t.Fatalf("string rejection = %v", err)
+	}
+	// Synchronous throws already carried the name; this keeps it that way.
+	_, err = r.Eval(ctx, `(function () { const x = null; return x.length })()`)
+	if err == nil || !strings.Contains(err.Error(), "TypeError:") {
+		t.Fatalf("sync throw = %v", err)
+	}
+}
