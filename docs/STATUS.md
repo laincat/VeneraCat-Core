@@ -104,6 +104,8 @@
 
 31 项 SKIP 不是通过:缺少审计插件夹具目录,以及 `VC_WNACG_JS`、`MAGPIE_VENDOR_DIR` 未设置;对应真实 Copilot、Cloudflare 与社区插件夹具。审计目录此前写死成 Windows 临时路径,导致这些用例在 macOS 上毫无提示地跳过;现在改由 `MAGPIE_AUDIT_DIR` 指定,未设置时明确跳过。2026-11-03 在 Windows 上把两个变量都指向真实夹具后复跑(`magpieplugin` + `mobile`):**224 PASS / 0 FAIL / 0 SKIP**,日志 `E:/Temp/core-full-with-fixtures.log`。
 
+CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`、`Go (ubuntu-latest)` 与 `Apple (xcframework + Swift smoke test)`(run `41507032435`)。上一提交 `8e301cf` 的 macOS 作业显示为 cancelled,是被紧随其后的推送按并发策略取消,不是失败——Windows 与 Linux 当时都通过,Apple 作业因此跳过;这一点写在这里,免得把「被取消」当成红。
+
 2026-11-03 在 `6a66759` 上又跑了一遍:不带夹具变量 `go test ./...` 共 22 个包全过(相关用例按设计跳过);带上 `MAGPIE_AUDIT_DIR` 与 `MAGPIE_VENDOR_DIR` 时 `magpieplugin`、`mobile`、`comic/js` 三个包也全过,日志 `E:/Temp/core-go-test-all-6a66759.log`。
 
 同一轮补齐了 `MAGPIE_VENDOR_DIR` 的最后一处 SKIP:用 `npm pack` 取回四个已发布的第三方包(factory `0.1.41`、grok `0.2.3`、qoder `0.2.54`、workbuddy `0.2.14`)并解包后,`TestVendorPackagesAreRefused` 按预期拒绝它们,错误文本各自点名 `node:http` / `node:crypto` / `node:child_process` 且说明无法解析。此前该测试按目录名匹配 `-factory-auth`,而文档给出的解包方式目录就叫 `factory`,配方本身跑不通;现在改为读包内 `package.json` 的 `name` 字段匹配。日志 `E:/Temp/core-vendor-refusal.log`。这些结果只覆盖假传输与 loopback,不代表真实站点、真实账号或设备闭环;客户端 pin 未变。
