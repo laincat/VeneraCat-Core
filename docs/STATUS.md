@@ -102,7 +102,9 @@
 
 关键覆盖(均为假传输/假宿主):Promise 与多次 `await`、超时中断后可恢复、调用开始前取消、关闭会话取消进行中与后续调用、宿主 panic/取消/取消传到传输层;跨源隔离、备份 Cookie 分区命名、漫画与 Magpie 请求使用不同宿主 ID;Magpie 的 fetch 解析、AbortSignal 取消、分块流式到达、流失败上报、顺序与消费端停止/客户端失败/取消;mobile 的插件生命周期、设置/搜索选项/浏览页/网页登录 JSON、`9007199254740993` 精确字节不经过浮点舍入、取消到达同一宿主请求。新增的两条兼容边界用例(`TestCompatibilityReadOnlyAtob`、`TestCompatibilityCallRegisterWindow`)也在其中。
 
-31 项 SKIP 不是通过:缺少审计插件夹具目录,以及 `VC_WNACG_JS`、`MAGPIE_VENDOR_DIR` 未设置;对应真实 Copilot、Cloudflare 与社区插件夹具。审计目录此前写死成 Windows 临时路径,导致这些用例在 macOS 上毫无提示地跳过;现在改由 `MAGPIE_AUDIT_DIR` 指定,未设置时明确跳过。2026-11-03 在 Windows 上用该变量指向现有夹具复跑:`magpieplugin` 136 PASS / 1 SKIP(`MAGPIE_VENDOR_DIR` 未设),`mobile` 87 PASS / 0 SKIP。这些结果只覆盖假传输与 loopback,不代表真实站点、真实账号或设备闭环;客户端 pin 未变。
+31 项 SKIP 不是通过:缺少审计插件夹具目录,以及 `VC_WNACG_JS`、`MAGPIE_VENDOR_DIR` 未设置;对应真实 Copilot、Cloudflare 与社区插件夹具。审计目录此前写死成 Windows 临时路径,导致这些用例在 macOS 上毫无提示地跳过;现在改由 `MAGPIE_AUDIT_DIR` 指定,未设置时明确跳过。2026-11-03 在 Windows 上把两个变量都指向真实夹具后复跑(`magpieplugin` + `mobile`):**224 PASS / 0 FAIL / 0 SKIP**,日志 `E:/Temp/core-full-with-fixtures.log`。
+
+同一轮补齐了 `MAGPIE_VENDOR_DIR` 的最后一处 SKIP:用 `npm pack` 取回四个已发布的第三方包(factory `0.1.41`、grok `0.2.3`、qoder `0.2.54`、workbuddy `0.2.14`)并解包后,`TestVendorPackagesAreRefused` 按预期拒绝它们,错误文本各自点名 `node:http` / `node:crypto` / `node:child_process` 且说明无法解析。此前该测试按目录名匹配 `-factory-auth`,而文档给出的解包方式目录就叫 `factory`,配方本身跑不通;现在改为读包内 `package.json` 的 `name` 字段匹配。日志 `E:/Temp/core-vendor-refusal.log`。这些结果只覆盖假传输与 loopback,不代表真实站点、真实账号或设备闭环;客户端 pin 未变。
 
 ## 已复现的 MoeJS 兼容边界(2026-11-02)
 

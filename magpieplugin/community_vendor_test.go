@@ -1,6 +1,7 @@
 package magpieplugin_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +44,12 @@ func TestVendorPackagesAreRefused(t *testing.T) {
 		if err != nil || !info.IsDir() {
 			continue
 		}
-		name := filepath.Base(dir)
+		// Match on the package's own name, not the directory: the recipe above
+		// unpacks into "factory", and a directory-name match would find nothing.
+		name := packageName(t, dir)
+		if name == "" {
+			continue
+		}
 		for vendor, module := range wanted {
 			if !strings.Contains(name, "-"+vendor+"-auth") {
 				continue
@@ -65,6 +71,25 @@ func TestVendorPackagesAreRefused(t *testing.T) {
 	if seen == 0 {
 		t.Skipf("MAGPIE_VENDOR_DIR=%s has none of the four vendor packages", root)
 	}
+}
+
+// packageName reads the "name" field of a package directory's package.json, or
+// "" when the directory is not a package. The vendor match must use the package's
+// own name: an unpacked tarball lives in a directory named after the short
+// vendor, not the scoped package.
+func packageName(t *testing.T, dir string) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return ""
+	}
+	var meta struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(body, &meta) != nil {
+		return ""
+	}
+	return meta.Name
 }
 
 // loadPackageDir reads a package into a bundle the way a client would, then loads
