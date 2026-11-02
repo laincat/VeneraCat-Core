@@ -95,6 +95,14 @@ Real-source evidence (desktop `scripts/callback-probe.sh`): ten callbacks across
 
 - gomobile exposes `Core.ModifyImage(key, script, width, height, rgbaB64)` answering `{"width","height","rgba"}`: pixels cross as base64 (binary survives gomobile), the caller decodes and encodes, and "the script produced no image" is reported as `ErrModifyImage`, apart from the script itself throwing.
 
+## Official script load sweep (2026-11-02)
+
+Loaded the official v2 scripts through the public `comic/js` entry point to look for engine gaps at load time. The probe lives outside the repository (`E:/Temp/gosrcprobe`, with a `replace` to this checkout) and is not a test case; the scripts are the 34 files in `E:/Temp/nkprobe/official-srcs`.
+
+Result: with storage, a cookie store and a transport, **32/34 load completely** (key, kind, version and minAppVersion recorded). The other two fail because the probe's single canned body does not match their `init()`: `comic_walker` parses a token JSON and `jm` parses page HTML. `shonen_jump_plus` passed precisely because of that canned HTML, so this is a fixture problem, not an engine problem.
+
+So this round found **no new JavaScript compatibility gap**: class fields, getters, `randomInt`, `loadData` and `Network.get` inside `init()` all work. Limits: only load time is covered, not each method's real network behaviour; `comic_walker` and `jm` were not rechecked against their live sites; the known register limit and frozen `atob` need dedicated cases and were not part of this sweep.
+
 ## Security review (2026-10-29)
 
 An independent review found 12 issues (4 high, 5 medium, 3 low), **all fixed with regression tests**. The most serious let sources read each other's cookies and storage; it was reproduced and fixed by running each source in its own engine, see [JS-ISOLATION.en.md](JS-ISOLATION.en.md).

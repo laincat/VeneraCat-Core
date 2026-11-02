@@ -96,6 +96,14 @@
 
 - gomobile 侧是 `Core.ModifyImage(key, script, width, height, rgbaB64)` → `{"width","height","rgba"}`:像素以 base64 过边界(二进制可跨 gomobile),解码与编码由调用方做,「脚本没给出图像」单独报 `ErrModifyImage`,与「脚本本身抛错」区分开。
 
+## 官方脚本加载巡检(2026-11-02)
+
+用 `comic/js` 的公开入口跑一遍官方 v2 脚本,确认引擎在加载期没有兼容缺口。探针在仓库外(`E:/Temp/gosrcprobe`,以 `replace` 指向本仓库),不是测试用例;脚本来自 `E:/Temp/nkprobe/official-srcs` 的 34 份。
+
+结果:提供存储 + Cookie 存储 + 传输后,**32/34 完整加载**(记录 key、kind、version、minAppVersion);其余两份失败的原因是探针给的固定响应体不匹配它们的 `init()`:`comic_walker` 的 `init()` 解析 token JSON,`jm` 的 `init()` 解析页面 HTML。同一轮里 `shonen_jump_plus` 正是靠探针返回的 HTML 才通过,说明这是夹具问题,不是引擎问题。
+
+因此本轮**没有发现新的 JS 兼容缺口**:类字段、getter、`randomInt`、`loadData`、`init()` 内的 `Network.get` 都正常。限制:只覆盖加载期,不覆盖各方法的真实网络行为;`comic_walker`/`jm` 的 `init()` 在真实站点上未复验;已知的 register 上限与冻结 `atob` 需要专门的用例,不在这次巡检范围内。
+
 ## 安全审查(2026-10-29)
 
 独立审查发现 12 个问题(4 个高危、5 个中危、3 个低危),**全部已修复并补了回归测试**。最严重的问题是源之间可以互相读取 Cookie 和存储,已复现,并通过"每个源一个引擎"修复,见 [JS-ISOLATION.md](JS-ISOLATION.md)。
