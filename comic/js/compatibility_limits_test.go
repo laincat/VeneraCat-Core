@@ -92,3 +92,32 @@ func TestAsyncRejectionsKeepTheErrorName(t *testing.T) {
 		t.Fatalf("sync throw = %v", err)
 	}
 }
+
+// TextDecoder is the JS builtin's UTF-8 decoder, not the browser's: a source that
+// opens a GBK page cannot decode it here. The alternative is the source API's own
+// convert route (sendMessage with method "convert"), which goes through Go's
+// encoding tables; this test pins both halves so the limit is documented by
+// something that fails when it changes.
+func TestCompatibilityTextDecoderIsUTF8Only(t *testing.T) {
+	r, err := New(Options{}, Services{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	got, err := r.Eval(ctx, `new TextDecoder('utf-8').decode(new Uint8Array([0xe4, 0xb8, 0xad]))`)
+	if err != nil || string(got) != `"中"` {
+		t.Fatalf("utf-8: got %s, err %v", got, err)
+	}
+	_, err = r.Eval(ctx, `new TextDecoder('gbk').decode(new Uint8Array([0xd6, 0xd0]))`)
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("gbk should be refused, got err %v", err)
+	}
+	// The convert route is reachable from a source, whatever it does with the
+	// bytes; a missing host function would throw here.
+	got, err = r.Eval(ctx, `typeof sendMessage`)
+	if err != nil || string(got) != `"function"` {
+		t.Fatalf("sendMessage: got %s, err %v", got, err)
+	}
+}
