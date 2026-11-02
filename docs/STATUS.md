@@ -150,6 +150,10 @@ CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`�
 5. AniBaka `anx-rule/2` 流水线规则:未做(第二阶段)。
 6. **把分段传输接进客户端**:Core 侧的分段桥与包桥都通了(死锁已修,见上),客户端还没有实现 `HostStream`,所以 iOS 与桌面端目前仍整包返回。下一步是让 iOS 与桌面各实现一次 `streamOpen`/`streamNext`/`streamClose`,并把 Core 的 pin 提到含这次修复的提交。
 
+## URL 补齐后重跑官方脚本巡检(2026-11-03)
+
+`5cfdef2`(prelude 提供 `URL`/`URLSearchParams`)之后重跑同一份巡检:**34 个脚本 / 33 个加载成功 / 1 个失败**,仍是 `jm`,失败原因也仍是它的 `init()` 需要真实站点响应(`TypeError: Cannot read properties of null (reading 'length')`)。这条错误现在带 `TypeError:` 前缀——正是 `b2610a5` 想在真实路径上看到的效果,不是新问题。日志 `E:/Temp/core-sweep-url.log`。
+
 ## pin 维护结果(2026-11-03)
 
 两端都已经从 `214e7782` 升到 `8e14aad`:`b2610a5` 的「待升级」到此关闭。
