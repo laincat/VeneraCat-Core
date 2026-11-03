@@ -65,7 +65,7 @@ Core 自带三种标准协议的请求构造:OpenAI Chat Completions、OpenAI Re
 
 ## mobile 入口
 
-`mobile` 包导出三个方法,JSON 进出:
+`mobile` 包导出以下方法,JSON 进出:
 
 | 方法 | 作用 |
 |---|---|
@@ -79,6 +79,10 @@ config JSON 是 `{"protocol":"chat|responses|messages","baseUrl":"","apiKey":"..
 `SendAIRequest` 走 Core 的宿主桥,所以请求会带上 `id`,也能被 `CancelHTTP` 取消。
 
 `SendAIRequestStream` 必须建在一个用 `NewWithStream(configJSON, host, stream)` 建立的 Core 上;用 `New` 建出来的实例会明确报 `cannot stream`,而不是把 SSE 当整包读成空回答。正文缺 `"stream":true` 时同样直接报错——供应商没被要求流式时只回一个 JSON 对象,解析出来是空文本,看起来像供应商沉默。
+
+返回成功需要同时满足 HTTP 2xx 和协议结束标记(`[DONE]`、`response.completed`、`message_stop`)。只有连接 EOF 或没收完的最后一个事件都算未完成,不返回“成功”的部分文本;HTTP 403/503 等状态也不能变成空回答成功。
+
+取消覆盖等待 `StreamOpen` 与 `StreamNext` 的阶段。客户端的 `StreamClose` 必须能打断等待,并允许重复关闭;当 `StreamOpen` 尚未返回自己的流 ID 时,关闭使用请求 JSON 中已知的 `id`。
 
 解码只取文本增量:`chat` 读 `choices[0].delta.content`,`responses` 读 `output_text.delta` 事件,`messages` 读 `content_block_delta` 里的 `text_delta`;此接口只返回汇总文本,不返回工具调用、推理块、用量或原始事件;也不能向界面逐块推送。网络分块与事件边界不对齐,解码器按空行收尾事件、跨块缓冲;`[DONE]`、`response.completed`、`message_stop` 表示结束,供应商的错误事件当错误抛出而不是当作空回答。
 

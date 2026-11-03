@@ -65,7 +65,7 @@ The older `magpierouting` package and `mobile.Magpie.PlanRoute` are an early har
 
 ## The mobile entry points
 
-The `mobile` package exports three methods, JSON in and out:
+The `mobile` package exports the following methods, JSON in and out:
 
 | Method | What it does |
 |---|---|
@@ -79,6 +79,10 @@ The config JSON is `{"protocol":"chat|responses|messages","baseUrl":"","apiKey":
 `SendAIRequest` goes through Core's host bridge, so the request carries an `id` and `CancelHTTP` can stop it.
 
 `SendAIRequestStream` needs a Core built with `NewWithStream(configJSON, host, stream)`; an instance from `New` reports `cannot stream` instead of reading SSE as a whole body and returning an empty reply. A body without `"stream":true` is refused too: a provider that was not asked for events answers with one JSON object, which decodes to no text at all and looks like a silent provider.
+
+Success requires both HTTP 2xx and a protocol completion marker (`[DONE]`, `response.completed`, or `message_stop`). Transport EOF alone and an unterminated final event are incomplete responses, so partial text is not returned as a successful answer. HTTP errors such as 403/503 cannot become empty successes either.
+
+Cancellation covers waits in both `StreamOpen` and `StreamNext`. The client's `StreamClose` must interrupt those waits and tolerate repeated calls. While `StreamOpen` has not returned its stream ID, closing uses the known `id` in the request JSON.
 
 Only text deltas are extracted: `chat` reads `choices[0].delta.content`, `responses` reads `output_text.delta` events, and `messages` reads the `text_delta` inside `content_block_delta`. This API returns only accumulated text; it does not return tool calls, reasoning blocks, usage or raw events, and cannot push individual chunks to the UI. Network chunks do not line up with events, so the decoder closes an event on a blank line and buffers across chunks; `[DONE]`, `response.completed` and `message_stop` end the answer, and a provider error event is raised as an error rather than an empty reply.
 

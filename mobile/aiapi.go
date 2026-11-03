@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -104,10 +105,9 @@ func (c *Core) BuildAIModelsRequest(configJSON string) (_ string, err error) {
 // own transport. The answer carries the body as base64 so exact bytes and
 // key order survive.
 //
-// This is the non-streaming path. A streamed reply needs a transport that can
-// hand over chunks while the request is still running, which the host bridge
-// does not offer yet; a caller that asks for "stream":true gets the whole
-// response at once and is told so in the answer.
+// This is the whole-response path. Even if the body asks for "stream":true,
+// this method returns the whole response and reports Streamed=false.
+// SendAIRequestStream uses the optional chunked transport instead.
 func (c *Core) SendAIRequest(callID int64, configJSON, bodyJSON string) (_ string, err error) {
 	defer guard(&err)
 	defer c.endCall(callID)
@@ -140,9 +140,9 @@ func (c *Core) SendAIRequest(callID int64, configJSON, bodyJSON string) (_ strin
 
 // aiStreamResponse is a streamed standard answer.
 //
-// Text is what the events added up to. Status, headers and finalUrl describe the
-// reply itself, which only the last chunk carries, so a caller that stopped early
-// sees zero here rather than a guess.
+// Text is what the events added up to. A successful result requires both a
+// successful HTTP status and the protocol's completion event. Failed, cancelled
+// or truncated requests return an error instead of an incomplete answer.
 type aiStreamResponse struct {
 	Status   int         `json:"status"`
 	Headers  http.Header `json:"headers"`
@@ -172,6 +172,7 @@ func (c *Core) SendAIRequestStream(callID int64, configJSON, bodyJSON string) (_
 	if err := aiapi.RequireStream(json.RawMessage(bodyJSON)); err != nil {
 		return "", err
 	}
+	request.Header.Set("Accept", "text/event-stream")
 	decoder, err := aiapi.NewStreamDecoder(cfg.Protocol)
 	if err != nil {
 		return "", err
@@ -193,6 +194,12 @@ func (c *Core) SendAIRequestStream(callID int64, configJSON, bodyJSON string) (_
 		})
 	if err != nil {
 		return "", err
+	}
+	if answer.Status < http.StatusOK || answer.Status >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("mobile: AI stream returned HTTP %d", answer.Status)
+	}
+	if !decoder.Done() {
+		return "", errors.New("mobile: AI stream ended before completion")
 	}
 	out := aiStreamResponse{
 		Status: answer.Status, Headers: answer.Header, Text: text.String(),

@@ -32,8 +32,9 @@ type HostStream interface {
 	// {"done":bool,"chunkBase64":"…","status":n,"headers":{…},"finalUrl":"…"}.
 	// status, headers and finalUrl are filled on the final call.
 	StreamNext(id int64) (string, error)
-	// StreamClose aborts the request and releases it. It is safe to call after
-	// the stream ended.
+	// StreamClose aborts the request and releases it. It must unblock a pending
+	// StreamOpen or StreamNext. While StreamOpen is pending, id is the request
+	// id from requestJSON; repeated calls and calls after the stream ends are safe.
 	StreamClose(id int64)
 }
 
@@ -110,8 +111,23 @@ func (s *streamBridge) send(ctx context.Context, partition, method, target strin
 	if err != nil {
 		return nil, err
 	}
+	// The request id is known before opening. Closing that id must also abort
+	// a client waiting for response headers, before it can return a stream id.
+	requestID := id
+	openingClosed := make(chan struct{})
+	stopOpening := context.AfterFunc(ctx, func() {
+		defer close(openingClosed)
+		s.h.StreamClose(requestID)
+	})
 	head, err := s.h.StreamOpen(string(encoded))
+	if !stopOpening() {
+		<-openingClosed
+	}
 	if err != nil {
+		s.h.StreamClose(requestID)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	var opened struct {
@@ -163,6 +179,9 @@ func (s *streamBridge) send(ctx context.Context, partition, method, target strin
 			}
 		}
 		if chunk.Done {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			return &streamAnswer{Status: chunk.Status, Header: chunk.Headers, URL: chunk.FinalURL}, nil
 		}
 	}

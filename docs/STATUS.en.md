@@ -149,6 +149,16 @@ An independent review found 12 issues (4 high, 5 medium, 3 low), **all fixed wit
 5. AniBaka `anx-rule/2` pipeline rules: not done (second phase).
 6. **Wire chunked transport into the clients**: the Core-side bridge, the package bridge and standard-protocol stream decoding are all in place; iOS implements `CoreStreamHost` and builds the Magpie runner with `NewMagpieWithStream`, but the main `Core` is still built with `New` and the standard-interface screen has not been wired to `SendAIRequestStream`, so standard calls still return whole replies. The desktop has no `HostStream` implementation yet.
 
+## Standard stream completion and cancellation during open (2026-11-03)
+
+Branch `fix/ai-stream-completion` fixes two reproduced gaps. `SendAIRequestStream` did not check HTTP status or protocol completion: partial Chat/Responses/Messages text could be returned as a complete answer after transport closure, and HTTP 403/503 could become empty successes. Of eight new subcases, all six error scenarios failed before the fix while two complete protocol replies passed; log `E:/Temp/core-ai-stream-before.log`. Success now requires HTTP 2xx and a protocol completion marker; an unterminated final event cannot stand in for completion. Requests also declare `Accept: text/event-stream`.
+
+The chunk bridge previously registered cancellation only after `StreamOpen` returned, leaving it blocked while awaiting response headers. A blocking-host test reproduced the failure (`E:/Temp/core-ai-stream-open-before.log`). Cancellation during this phase now closes the request ID, and the opening callback is stopped or joined before leaving the phase. Clients must tolerate repeated closes and unblock waits when the request JSON ID is closed; the test releases its wait only for a matching ID. Subsequent `StreamNext` uses the actual returned stream ID.
+
+After the fix, `go vet ./...` and `go test -race -count=1 ./...` pass across all 22 packages, as do paired-document and English-error checks. Full logs: `E:/Temp/core-ai-stream-vet.log`, `E:/Temp/core-ai-stream-race.log`, `E:/Temp/core-ai-stream-docs.log`, `E:/Temp/core-ai-stream-errors.log`.
+
+These are fake-host protocol and lifetime regressions, not real-provider, first-network-chunk or streaming-UI evidence. The branch is not integrated into main or client pins; SDK and consumer validation remain pending.
+
 ## Streamed decoding for the standard protocols (2026-11-03)
 
 `aiapi` gains an SSE decoder and `RequireStream`; mobile gains `NewWithStream` and `SendAIRequestStream`. A standard-protocol answer can now be read and parsed as it arrives instead of only being available whole.

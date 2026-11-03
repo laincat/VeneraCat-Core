@@ -47,9 +47,8 @@ func NewStreamDecoder(protocol Protocol) (*StreamDecoder, error) {
 	return &StreamDecoder{protocol: protocol}, nil
 }
 
-// Done reports whether the provider ended the answer. It stays false when a
-// stream simply closed, which is why the caller keeps whatever text arrived
-// instead of deciding the reply failed.
+// Done reports whether the provider ended the answer. A transport EOF alone
+// does not complete the protocol: callers must reject an unfinished reply.
 func (d *StreamDecoder) Done() bool { return d.done }
 
 // Push takes the next piece of the body and returns the text deltas it

@@ -51,6 +51,61 @@ func TestStreamBridgeCancellationUnblocksPendingRead(t *testing.T) {
 	}
 }
 
+type blockingOpenStreamHost struct {
+	streamHostStub
+	started   chan struct{}
+	released  chan struct{}
+	once      sync.Once
+	requestID int64
+}
+
+func (h *blockingOpenStreamHost) StreamOpen(wire string) (string, error) {
+	var req streamRequest
+	if err := json.Unmarshal([]byte(wire), &req); err != nil {
+		return "", err
+	}
+	h.mu.Lock()
+	h.requestID = req.ID
+	h.mu.Unlock()
+	close(h.started)
+	<-h.released
+	return "", errors.New("opening aborted")
+}
+
+func (h *blockingOpenStreamHost) StreamClose(id int64) {
+	h.mu.Lock()
+	matches := id == h.requestID
+	h.mu.Unlock()
+	if matches {
+		h.once.Do(func() { close(h.released) })
+	}
+}
+
+func TestStreamBridgeCancellationUnblocksPendingOpen(t *testing.T) {
+	h := &blockingOpenStreamHost{started: make(chan struct{}), released: make(chan struct{})}
+	bridge := streamBridge{h: h, assign: nextHostRequestID}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := bridge.DoStream(ctx, &magpieplugin.Request{Method: "POST", URL: "https://gw.test/v1/chat/completions"}, func([]byte) error { return nil })
+		result <- err
+	}()
+	<-h.started
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		// Release the fake host even on failure so the test leaves no reader.
+		h.once.Do(func() { close(h.released) })
+		<-result
+		t.Fatal("cancellation did not unblock StreamOpen")
+	}
+}
+
 // sseLine wraps one JSON payload as an SSE data line.
 func sseLine(payload string) string { return "data: " + payload + "\n\n" }
 

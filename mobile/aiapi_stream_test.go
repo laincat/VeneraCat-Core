@@ -206,6 +206,56 @@ func TestSendAIRequestStreamStopsWhenCancelled(t *testing.T) {
 	}
 }
 
+func TestSendAIRequestStreamRequiresSuccessfulCompletion(t *testing.T) {
+	cases := []struct {
+		name, protocol, events, wantError, wantText string
+		status                                      int
+	}{
+		{name: "chat truncated", protocol: "chat", events: `data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n", wantError: "completion"},
+		{name: "responses truncated", protocol: "responses", events: `data: {"type":"response.output_text.delta","delta":"partial"}` + "\n\n", wantError: "completion"},
+		{name: "messages truncated", protocol: "messages", events: `data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}` + "\n\n", wantError: "completion"},
+		{name: "HTTP error with JSON body", protocol: "chat", status: 403, events: `{"error":{"message":"forbidden"}}`, wantError: "HTTP 403"},
+		{name: "HTTP error with SSE body", protocol: "chat", status: 503, events: "data: [DONE]\n\n", wantError: "HTTP 503"},
+		{name: "unterminated final event", protocol: "chat", events: "data: [DONE]", wantError: "completion"},
+		{name: "responses completed", protocol: "responses", events: "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.completed\"}\n\n", wantText: "ok"},
+		{name: "messages completed", protocol: "messages", events: "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", wantText: "ok"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &aiStreamStub{fakeHost: &fakeHost{}, status: tc.status, chunks: []string{tc.events}}
+			core := newAIStreamCore(t, stub)
+			defer core.Close()
+			config := strings.Replace(aiStreamConfig, `"protocol":"chat"`, `"protocol":"`+tc.protocol+`"`, 1)
+			body := aiStreamBody
+			if tc.protocol == "responses" {
+				body = `{"model":"m","stream":true,"input":"hi"}`
+			} else if tc.protocol == "messages" {
+				body = `{"model":"m","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
+			}
+			answer, err := core.SendAIRequestStream(core.NewCall(), config, body)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("got answer=%q error=%v; want error containing %q", answer, err, tc.wantError)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				var out aiStreamResponse
+				if err := json.Unmarshal([]byte(answer), &out); err != nil {
+					t.Fatal(err)
+				}
+				if out.Text != tc.wantText || !out.Streamed {
+					t.Fatalf("unexpected answer: %+v", out)
+				}
+			}
+			if stub.closed != 1 {
+				t.Fatalf("stream closed %d times, want 1", stub.closed)
+			}
+		})
+	}
+}
+
 // The streamed answer is JSON on the wire even when it carries no text.
 func TestSendAIRequestStreamEmptyAnswerIsStillJSON(t *testing.T) {
 	stub := &aiStreamStub{fakeHost: &fakeHost{}, final: "https://gw.test/v1/chat/completions"}

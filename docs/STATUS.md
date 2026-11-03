@@ -150,6 +150,16 @@ CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`�
 5. AniBaka `anx-rule/2` 流水线规则:未做(第二阶段)。
 6. **把分段传输接进客户端**:Core 侧的分段桥、包桥与标准接口的流式解码都已就位;iOS 已实现 `CoreStreamHost` 并用 `NewMagpieWithStream` 建 Magpie 实例,但主 `Core` 仍用 `New` 建,标准接口页面也还没接 `SendAIRequestStream`,所以标准接口目前仍整包返回。桌面端仍未实现 `HostStream`。
 
+## 标准流式响应的完成条件与打开阶段取消(2026-11-03)
+
+分支 `fix/ai-stream-completion` 修复了两个已复现的缺口。旧 `SendAIRequestStream` 未检查 HTTP 状态与协议结束:Chat/Responses/Messages 的部分文本在连接关闭后可被当作完整回答,HTTP 403/503 也可能成为空回答成功。新增八个子用例中,六个错误场景修复前如期失败,两个完整协议回答通过,日志 `E:/Temp/core-ai-stream-before.log`。现在只有 HTTP 2xx 且收到协议结束标记才返回成功;未收完的最后一个事件不能充当结束。请求同时声明 `Accept: text/event-stream`。
+
+原分段桥只在 `StreamOpen` 返回后注册取消回调,等待响应头时仍可能卡住。新增阻塞宿主用例先复现失败(`E:/Temp/core-ai-stream-open-before.log`),随后把该阶段的取消接到请求 ID 对应的 `StreamClose`,并在离开打开阶段前收回其回调。重复关闭必须安全,客户端须能关闭请求 JSON 中的 ID 并唤醒等待;测试仅在 ID 匹配时释放阻塞。后续 `StreamNext` 仍用实际返回的流 ID。
+
+修复后 `go vet ./...` 与 `go test -race -count=1 ./...` 全部通过(22 个包),文档配对与英文错误文本检查通过。完整日志 `E:/Temp/core-ai-stream-vet.log`、`E:/Temp/core-ai-stream-race.log`、`E:/Temp/core-ai-stream-docs.log`、`E:/Temp/core-ai-stream-errors.log`。
+
+这是伪宿主的协议与生命周期回归,不证明真实供应商、网络首块时序或流式界面。该分支尚未整合到 main 或客户端 pin,仍需后续 SDK 与消费端验证。
+
 ## 标准接口的流式解码(2026-11-03)
 
 `aiapi` 新增 SSE 解码器与 `RequireStream`,mobile 侧新增 `NewWithStream` 与 `SendAIRequestStream`:标准协议的回答现在可以边收边解析成文本,不再只有「整包」一种口径。
