@@ -150,6 +150,12 @@ CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`�
 5. AniBaka `anx-rule/2` 流水线规则:未做(第二阶段)。
 6. **把分段传输接进客户端**:Core 侧的分段桥与包桥都通了(死锁已修,见上),客户端还没有实现 `HostStream`,所以 iOS 与桌面端目前仍整包返回。下一步是让 iOS 与桌面各实现一次 `streamOpen`/`streamNext`/`streamClose`,并把 Core 的 pin 提到含这次修复的提交。
 
+## URL 主机名大小写(2026-11-03)
+
+把 `5bd3b85` 这个 pin 接进 Nekophage 后,用一条源脚本实测 `new URL(...).host` 得到 `Images.Example.Test:8443`,而按 URL 标准特殊 scheme 的主机应是小写。源若拿它和 `example.test` 比较就会失败,错误看起来像源写错。现在 `http`/`https`/`ws`/`wss`/`ftp` 的主机名在构造时转小写,`host`/`origin`/`href` 随之一致;非特殊 scheme 保持原样。`TestURLPolyfillCoversWhatSourcesUse` 增加大小写主机与非特殊 scheme 用例。
+
+`go vet ./...`、`go test -race -count=1 ./...`(22 个包)与 `scripts/check-docs.sh` 通过,日志 `E:/Temp/core-url-host-vet.log`、`E:/Temp/core-url-host-test.log`、`E:/Temp/core-url-host-docs.log`。这是 Core 生产行为变化,两端 pin 随构建升到含此修复的提交。
+
 ## URL 补齐后重跑官方脚本巡检(2026-11-03)
 
 `5cfdef2`(prelude 提供 `URL`/`URLSearchParams`)之后重跑同一份巡检:**34 个脚本 / 33 个加载成功 / 1 个失败**,仍是 `jm`,失败原因也仍是它的 `init()` 需要真实站点响应(`TypeError: Cannot read properties of null (reading 'length')`)。这条错误现在带 `TypeError:` 前缀——正是 `b2610a5` 想在真实路径上看到的效果,不是新问题。日志 `E:/Temp/core-sweep-url.log`。

@@ -816,6 +816,9 @@
   }
 
   const URL_PATTERN = /^([a-zA-Z][a-zA-Z0-9+.-]*:)(?:\/\/([^/?#]*))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/;
+  // The schemes whose host is case-insensitive in the URL standard. Sources
+  // only use these; a non-special scheme keeps its host as written.
+  const SPECIAL_SCHEMES = ['http:', 'https:', 'ws:', 'wss:', 'ftp:'];
 
   class URL {
     constructor(input, base) {
@@ -843,6 +846,12 @@
       const portAt = hostport.lastIndexOf(':');
       const hasPort = portAt !== -1 && /^\d*$/.test(hostport.slice(portAt + 1));
       this.hostname = hasPort ? hostport.slice(0, portAt) : hostport;
+      // Addresses with a special scheme parse their host case-insensitively:
+      // a source comparing `new URL(imageUrl).host` against "example.test" must
+      // not fail on an uppercase link. Other schemes keep the host opaque.
+      if (SPECIAL_SCHEMES.indexOf(this.protocol) !== -1) {
+        this.hostname = this.hostname.toLowerCase();
+      }
       this.port = hasPort ? hostport.slice(portAt + 1) : '';
       this.pathname = absolute[3] || '/';
       this.searchParams = new URLSearchParams(absolute[4] || '');

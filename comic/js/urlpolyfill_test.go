@@ -19,6 +19,9 @@ func TestURLPolyfillCoversWhatSourcesUse(t *testing.T) {
 	ctx := context.Background()
 
 	cases := []struct{ script, want string }{
+		{`new URL("https://Images.Example.Test:8443/a/b.jpg?w=1").host`, `"images.example.test:8443"`},
+		{`new URL("https://Images.Example.Test/a/b.jpg").href`, `"https://images.example.test/a/b.jpg"`},
+		{`new URL("https://x.test/p").host`, `"x.test"`},
 		{`new URL("https://images.example.test:8443/a/b.jpg?w=1#f").host`, `"images.example.test:8443"`},
 		{`new URL("https://images.example.test/a/b.jpg").hostname`, `"images.example.test"`},
 		{`new URL("https://images.example.test/a/b.jpg").pathname`, `"/a/b.jpg"`},

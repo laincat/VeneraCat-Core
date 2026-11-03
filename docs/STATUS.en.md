@@ -149,6 +149,12 @@ An independent review found 12 issues (4 high, 5 medium, 3 low), **all fixed wit
 5. AniBaka `anx-rule/2` pipeline rules: not done (second phase).
 6. **Wire chunked transport into the clients**: both the Core-side bridge and the package bridge now work (the deadlock is fixed, see above), but no client implements `HostStream` yet, so iOS and the desktop still get whole replies. The next step is for iOS and the desktop each to implement `streamOpen` / `streamNext` / `streamClose`, and to move the Core pin forward to a commit that contains this fix.
 
+## URL host case (2026-11-03)
+
+After wiring `5bd3b85` into Nekophage, a source script showed `new URL(...).host` returning `Images.Example.Test:8443`, while the URL standard lowercases the host of a special scheme. A source comparing it with `example.test` would fail in a way that looks like a source bug. Hosts for `http`, `https`, `ws`, `wss` and `ftp` are now lowercased during construction and `host`/`origin`/`href` follow; non-special schemes keep their host as written. `TestURLPolyfillCoversWhatSourcesUse` covers both an uppercase host and a non-special scheme.
+
+`go vet ./...`, `go test -race -count=1 ./...` (22 packages) and `scripts/check-docs.sh` pass; logs `E:/Temp/core-url-host-vet.log`, `E:/Temp/core-url-host-test.log`, `E:/Temp/core-url-host-docs.log`. This changes Core's production behaviour, so both pins move to the commit carrying it on the next client build.
+
 ## The official-source sweep after the URL class (2026-11-03)
 
 Re-ran the same sweep after `5cfdef2` (the prelude now provides `URL` and `URLSearchParams`): **34 scripts, 33 loaded, 1 failed**, still `jm`, and still for the same reason — its `init()` needs a live response (`TypeError: Cannot read properties of null (reading 'length')`). That message now carries the `TypeError:` prefix, which is what `b2610a5` was for and now shows on a real path; nothing new broke. Log `E:/Temp/core-sweep-url.log`.
