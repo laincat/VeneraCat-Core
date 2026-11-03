@@ -70,6 +70,27 @@ type streamBridge struct {
 // The request id comes from the same counter the non-streaming bridge uses, so
 // Swift's task table cannot confuse a stream with an ordinary request.
 func (s *streamBridge) DoStream(ctx context.Context, req *magpieplugin.Request, onChunk func([]byte) error) (*magpieplugin.Response, error) {
+	answer, err := s.send(ctx, "magpie", req.Method, req.URL, req.Header, req.Body, onChunk)
+	if err != nil {
+		return nil, err
+	}
+	return &magpieplugin.Response{
+		Status: answer.Status, StatusText: http.StatusText(answer.Status),
+		Header: answer.Header, URL: answer.URL,
+	}, nil
+}
+
+// streamAnswer is what a finished stream reported about the reply itself: the
+// text arrived through onChunk, these are the head fields.
+type streamAnswer struct {
+	Status int
+	Header http.Header
+	URL    string
+}
+
+// send is the part both callers share. The partition is a parameter because a
+// plugin request and a standard AI request must not read each other's cookies.
+func (s *streamBridge) send(ctx context.Context, partition, method, target string, header http.Header, body []byte, onChunk func([]byte) error) (*streamAnswer, error) {
 	if s == nil || s.h == nil {
 		return nil, errors.New("mobile: this client cannot stream")
 	}
@@ -78,11 +99,11 @@ func (s *streamBridge) DoStream(ctx context.Context, req *magpieplugin.Request, 
 	}
 	id := s.assign()
 	wire := streamRequest{
-		ID: id, Method: req.Method, URL: req.URL,
-		Headers: http.Header(req.Header).Clone(), Partition: "magpie",
+		ID: id, Method: method, URL: target,
+		Headers: http.Header(header).Clone(), Partition: partition,
 	}
-	if len(req.Body) > 0 {
-		wire.BodyBase64 = base64.StdEncoding.EncodeToString(req.Body)
+	if len(body) > 0 {
+		wire.BodyBase64 = base64.StdEncoding.EncodeToString(body)
 	}
 	encoded, err := json.Marshal(wire)
 	if err != nil {
@@ -132,10 +153,7 @@ func (s *streamBridge) DoStream(ctx context.Context, req *magpieplugin.Request, 
 			}
 		}
 		if chunk.Done {
-			return &magpieplugin.Response{
-				Status: chunk.Status, StatusText: http.StatusText(chunk.Status),
-				Header: chunk.Headers, URL: chunk.FinalURL,
-			}, nil
+			return &streamAnswer{Status: chunk.Status, Header: chunk.Headers, URL: chunk.FinalURL}, nil
 		}
 	}
 }

@@ -25,7 +25,7 @@
 | `video/builtin/hongguo` | 红果短剧网页路径(不含 App 签名、设备注册和 DRM 密钥) |
 | `video/hls` | m3u8 解析、改写、去广告、AES-128 解密 |
 | `plugin` | 统一插件注册表:漫画源、JS 视频源、Kazumi 规则、内置源 |
-| `aiapi` | 内置标准接口的请求构造:OpenAI Chat/Responses、Anthropic Messages;原生正文、鉴权头、恒不启用 Cookie;只构造不执行 |
+| `aiapi` | 内置标准接口的请求构造:OpenAI Chat/Responses、Anthropic Messages;原生正文、鉴权头、恒不启用 Cookie;只构造不执行。**流式回答的 SSE 解码**也在这里(见下) |
 | `mobile` | gomobile 接口(JSON 进出)、宿主桥(HTTP、验证、存储、Cookie、界面请求、剪贴板)、panic 保护、取消传递 |
 | `magpieplugin` 重试判决 | 一次失败的尝试要不要换个端点,由一个**带理由的判决**回答(`Decide(err, attempt) → {Retry, Reason}`),理由包括:调用方已经走了、读者已看到部分回答、请求本身被拒、密钥被拒、限流、上游不可用。`RouteError` 带上 `Stopped` 说明「为什么在还有端点时停下」。从前是「只要没出字就一律换下一个」:一个 400 会把每个端点都试一遍,每个都等一次超时。`Send` 在开第一条连接前也会检查 `ctx`,没人等的请求不开连接。| 13 个用例(状态分类表 + 400 只试一次 + 401 换下一个 + 取消不发起) |
 | `magpieplugin` 结束原因归一 | 三种方言把「为什么结束」各说一套(Chat `stop`、Responses `completed`、Anthropic `end_turn`;截断是 `length`/`incomplete`/`max_tokens`),现在都归一到一套词表(`NormalizeFinish`),原始值仍保留。没见过的结尾原样透出而不是当成正常结束——把未知结局报成「说完了」是唯一确定错误的答案。顺带修掉一个真问题:Chat 的最后一段文字与结束原因同在一块时,结束原因会被丢掉,于是被 token 上限截断的回复看起来像正常说完。 | 3 组 20 例(词表 / 未知值 / 三方言流内判定截断) |
@@ -148,7 +148,21 @@ CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`�
 3. 真实世界源无法进仓库(wnacg 等没有许可证),所以 CI 的漫画全链路用自己写的内联源(`mobile/mobile_test.go` 的 `comic`、`comic/js/async_test.go` 的 `miniSource`)跑;真实源兼容性由 Nekophage 的 `TestLiveSource` 在仓库外验证。
 4. 视频下载与离线缓存、弹幕、Bangumi:未做(第二阶段)。
 5. AniBaka `anx-rule/2` 流水线规则:未做(第二阶段)。
-6. **把分段传输接进客户端**:Core 侧的分段桥与包桥都通了(死锁已修,见上),客户端还没有实现 `HostStream`,所以 iOS 与桌面端目前仍整包返回。下一步是让 iOS 与桌面各实现一次 `streamOpen`/`streamNext`/`streamClose`,并把 Core 的 pin 提到含这次修复的提交。
+6. **把分段传输接进客户端**:Core 侧的分段桥、包桥与标准接口的流式解码都已就位;iOS 已实现 `CoreStreamHost` 并用 `NewMagpieWithStream` 建 Magpie 实例,但主 `Core` 仍用 `New` 建,标准接口页面也还没接 `SendAIRequestStream`,所以标准接口目前仍整包返回。桌面端仍未实现 `HostStream`。
+
+## 标准接口的流式解码(2026-11-03)
+
+`aiapi` 新增 SSE 解码器与 `RequireStream`,mobile 侧新增 `NewWithStream` 与 `SendAIRequestStream`:标准协议的回答现在可以边收边解析成文本,不再只有「整包」一种口径。
+
+- **事件形状不同,边界相同**:三种协议的 SSE 都是「`data:` 行 + 空行收尾」,但 `chat` 的文本在 `choices[0].delta.content`,`responses` 在 `output_text.delta` 事件里,`messages` 在 `content_block_delta` 的 `text_delta` 里。解码器只取文本增量;工具调用、推理块与用量留在原始字节里,需要的人自己解析事件。
+- **分块不是事件**:一次读取可能只拿到半行,也可能一次拿到多个事件。解码器按空行收尾事件、跨块缓冲,超过 1 MiB 仍未收尾就报错,避免一个不发空行的供应商把内存吃光。
+- **结束与错误分开**:`[DONE]`、`response.completed`、`message_stop` 标记结束;供应商的错误事件(`{"error":{...}}`)直接作为错误抛出,不会被当成「答完了但没字」。
+- **调用方错误要说清楚**:正文缺 `"stream":true` 时直接报错——供应商没被要求流式时只回一个 JSON 对象,解析结果是空文本,看起来像供应商沉默。用 `New`(而非 `NewWithStream`)建出来的 Core 会报 `cannot stream`,而不是假装流式。
+- **分区不串**:标准接口的流式请求走自己的 `partition`(默认空),不会借漫画源的 Cookie 罐;插件流式仍固定 `magpie` 分区。两者共用同一个分段桥,但分区是参数而不是常量。
+
+覆盖(全部为假宿主/假传输):`aiapi/stream_test.go` 9 例(chat 增量、跨块切分、responses 事件、anthropic 文本与工具增量区分、供应商错误、坏事件、未知协议、`RequireStream`),`mobile/aiapi_stream_test.go` 7 例(端到端增量拼接、正文缺 `stream:true` 且在开连接前拒绝、非流式 Core 明确报错、供应商错误与传输失败、取消后不再返回答案、空回答仍是合法 JSON)。`go test ./...` 全通过,`go test -race ./aiapi/ ./mobile/` 通过,日志 `E:/Temp/core-stream-full.log`、`E:/Temp/core-stream-race.log`。
+
+**这仍不是流式界面**:iOS 标准接口页面尚未接入,首次增量到达的界面行为、真实供应商的分块节奏都还没有证据;真实账号调用仍未做。
 
 ## URL 主机名大小写(2026-11-03)
 

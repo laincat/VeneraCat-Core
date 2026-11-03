@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/laincat/veneracat-core/aiapi"
 	"github.com/laincat/veneracat-core/host"
@@ -135,4 +136,67 @@ func (c *Core) SendAIRequest(callID int64, configJSON, bodyJSON string) (_ strin
 		return "", err
 	}
 	return string(encoded), nil
+}
+
+// aiStreamResponse is a streamed standard answer.
+//
+// Text is what the events added up to. Status, headers and finalUrl describe the
+// reply itself, which only the last chunk carries, so a caller that stopped early
+// sees zero here rather than a guess.
+type aiStreamResponse struct {
+	Status   int         `json:"status"`
+	Headers  http.Header `json:"headers"`
+	Text     string      `json:"text"`
+	FinalURL string      `json:"finalUrl"`
+	Streamed bool        `json:"streamed"`
+}
+
+// SendAIRequestStream performs a standard request and returns the answer's text
+// as the provider produced it.
+//
+// It needs a Core built with NewWithStream, and a body that says
+// "stream": true. Deltas are collected here, so a caller gets the whole text at
+// the end without a callback; a caller that wants to paint text while it
+// arrives keeps using BuildAIRequest on its own connection.
+func (c *Core) SendAIRequestStream(callID int64, configJSON, bodyJSON string) (_ string, err error) {
+	defer guard(&err)
+	defer c.endCall(callID)
+	cfg, err := configFromJSON(configJSON)
+	if err != nil {
+		return "", err
+	}
+	request, err := aiapi.BuildRequest(cfg, json.RawMessage(bodyJSON))
+	if err != nil {
+		return "", err
+	}
+	if err := aiapi.RequireStream(json.RawMessage(bodyJSON)); err != nil {
+		return "", err
+	}
+	decoder, err := aiapi.NewStreamDecoder(cfg.Protocol)
+	if err != nil {
+		return "", err
+	}
+	ctx, done := c.ctx(callID)
+	defer done()
+	bridge := &streamBridge{h: c.stream, assign: nextHostRequestID}
+	var text strings.Builder
+	answer, err := bridge.send(ctx, cfg.Partition, request.Method, request.URL, request.Header, request.Body,
+		func(chunk []byte) error {
+			deltas, err := decoder.Push(chunk)
+			if err != nil {
+				return err
+			}
+			for _, delta := range deltas {
+				text.WriteString(delta)
+			}
+			return nil
+		})
+	if err != nil {
+		return "", err
+	}
+	out := aiStreamResponse{
+		Status: answer.Status, Headers: answer.Header, Text: text.String(),
+		FinalURL: answer.URL, Streamed: true,
+	}
+	return encode(out)
 }

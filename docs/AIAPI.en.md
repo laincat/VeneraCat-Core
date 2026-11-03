@@ -60,7 +60,7 @@ The older `magpierouting` package and `mobile.Magpie.PlanRoute` are an early har
 
 ## Not implemented yet
 
-- **Real-time streaming**: `mobileHost` does not implement `Streamer`, and the iOS network layer still waits for the whole response. `SendAIRequest` returns the whole response even when the body says `"stream":true`, and says `false` in the `streamed` field.
+- **The client's streaming screen**: Core can now read a reply as it arrives (`NewWithStream` + `SendAIRequestStream`), but the iOS standard-interface screen has not been wired to it and still uses the whole-answer `SendAIRequest`, reporting `false` in `streamed`.
 - Real-account verification: no vendor endpoint has been called with a real credential yet.
 
 ## The mobile entry points
@@ -72,8 +72,13 @@ The `mobile` package exports three methods, JSON in and out:
 | `BuildAIRequest(configJSON, bodyJSON)` | builds only, returns `{method,url,headers,bodyBase64,cookies,partition}` |
 | `BuildAIModelsRequest(configJSON)` | the model-list request for the same root, GET without a body |
 | `SendAIRequest(callID, configJSON, bodyJSON)` | builds and performs it through the client's own `Host.HTTP`, returns `{status,headers,bodyBase64,finalUrl,streamed}` |
+| `SendAIRequestStream(callID, configJSON, bodyJSON)` | reads the reply through `NewWithStream`'s chunked transport, returns `{status,headers,text,finalUrl,streamed:true}` |
 
 The config JSON is `{"protocol":"chat|responses|messages","baseUrl":"","apiKey":"...","anthropicVersion":"","partition":""}`.
 
 `SendAIRequest` goes through Core's host bridge, so the request carries an `id` and `CancelHTTP` can stop it.
+
+`SendAIRequestStream` needs a Core built with `NewWithStream(configJSON, host, stream)`; an instance from `New` reports `cannot stream` instead of reading SSE as a whole body and returning an empty reply. A body without `"stream":true` is refused too: a provider that was not asked for events answers with one JSON object, which decodes to no text at all and looks like a silent provider.
+
+Only text deltas are extracted: `chat` reads `choices[0].delta.content`, `responses` reads `output_text.delta` events, and `messages` reads the `text_delta` inside `content_block_delta`. Tool calls, reasoning blocks and usage stay in the raw bytes for a caller that wants to parse the event itself. Network chunks do not line up with events, so the decoder closes an event on a blank line and buffers across chunks; `[DONE]`, `response.completed` and `message_stop` end the answer, and a provider error event is raised as an error rather than an empty reply.
 

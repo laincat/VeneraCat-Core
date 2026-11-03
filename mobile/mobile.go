@@ -126,7 +126,10 @@ type config struct {
 
 // Core is one profile's engine.
 type Core struct {
-	host       Host
+	host Host
+	// stream is the optional chunked half of the client's transport. Nil when
+	// the caller used New, and then only the whole-answer paths are available.
+	stream     HostStream
 	bridge     *hostBridge
 	appVersion string
 	rt         *js.Runtime
@@ -163,6 +166,17 @@ const maxLogEntries = 400
 
 // New creates a Core.
 func New(configJSON string, h Host) (_ *Core, err error) {
+	return openCore(configJSON, h, nil)
+}
+
+// NewWithStream creates a Core that can also read a reply while it is still
+// arriving. A client that cannot stream keeps using New: the streamed calls
+// report that they need this constructor instead of failing somewhere deeper.
+func NewWithStream(configJSON string, h Host, stream HostStream) (_ *Core, err error) {
+	return openCore(configJSON, h, stream)
+}
+
+func openCore(configJSON string, h Host, stream HostStream) (_ *Core, err error) {
 	defer guard(&err)
 	if h == nil {
 		return nil, errors.New("mobile: host is required")
@@ -172,7 +186,7 @@ func New(configJSON string, h Host) (_ *Core, err error) {
 		return nil, fmt.Errorf("mobile: config: %w", err)
 	}
 	bridge := &hostBridge{h: h, loading: map[int64]func(){}}
-	c := &Core{host: h, bridge: bridge, appVersion: cfg.AppVersion, cancels: map[int64]context.CancelFunc{}}
+	c := &Core{host: h, stream: stream, bridge: bridge, appVersion: cfg.AppVersion, cancels: map[int64]context.CancelFunc{}}
 	rt, err := js.New(js.Options{MemoryLimit: cfg.MemoryLimitBytes}, js.Services{
 		Storage:   bridge,
 		Env:       js.Environment{Locale: cfg.Locale, Platform: cfg.Platform, AppVersion: cfg.AppVersion, DefaultUA: cfg.DefaultUserAgent},

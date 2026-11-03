@@ -60,7 +60,7 @@ Core 自带三种标准协议的请求构造:OpenAI Chat Completions、OpenAI Re
 
 ## 尚未实现
 
-- **实时流式**:`mobileHost` 未实现 `Streamer`,iOS 网络层仍等待完整响应。`SendAIRequest` 即使正文写了 `"stream":true` 也只返回完整响应,并在 `streamed` 字段里说 `false`。
+- **客户端流式界面**:Core 已能边收边解析(`NewWithStream` + `SendAIRequestStream`),但 iOS 标准接口页面还没有接入,仍走 `SendAIRequest` 的整包路径并在 `streamed` 里说 `false`。
 - **真实账号验证**:尚未用真实凭据调用过任何供应商接口。
 
 ## mobile 入口
@@ -72,8 +72,13 @@ Core 自带三种标准协议的请求构造:OpenAI Chat Completions、OpenAI Re
 | `BuildAIRequest(configJSON, bodyJSON)` | 只构造请求,返回 `{method,url,headers,bodyBase64,cookies,partition}` |
 | `BuildAIModelsRequest(configJSON)` | 同上的模型列表请求,GET 无正文 |
 | `SendAIRequest(callID, configJSON, bodyJSON)` | 构造并通过客户端自己的 `Host.HTTP` 发出,返回 `{status,headers,bodyBase64,finalUrl,streamed}` |
+| `SendAIRequestStream(callID, configJSON, bodyJSON)` | 用 `NewWithStream` 的分段传输边收边解析,返回 `{status,headers,text,finalUrl,streamed:true}` |
 
 config JSON 是 `{"protocol":"chat|responses|messages","baseUrl":"","apiKey":"...","anthropicVersion":"","partition":""}`。
 
 `SendAIRequest` 走 Core 的宿主桥,所以请求会带上 `id`,也能被 `CancelHTTP` 取消。
+
+`SendAIRequestStream` 必须建在一个用 `NewWithStream(configJSON, host, stream)` 建立的 Core 上;用 `New` 建出来的实例会明确报 `cannot stream`,而不是把 SSE 当整包读成空回答。正文缺 `"stream":true` 时同样直接报错——供应商没被要求流式时只回一个 JSON 对象,解析出来是空文本,看起来像供应商沉默。
+
+解码只取文本增量:`chat` 读 `choices[0].delta.content`,`responses` 读 `output_text.delta` 事件,`messages` 读 `content_block_delta` 里的 `text_delta`;工具调用、推理块与用量留在原始字节里,需要的人可以自己解析事件。网络分块与事件边界不对齐,解码器按空行收尾事件、跨块缓冲;`[DONE]`、`response.completed`、`message_stop` 表示结束,供应商的错误事件当错误抛出而不是当作空回答。
 
