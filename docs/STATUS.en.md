@@ -153,7 +153,7 @@ An independent review found 12 issues (4 high, 5 medium, 3 low), **all fixed wit
 
 After wiring `5bd3b85` into Nekophage, a source script showed `new URL(...).host` returning `Images.Example.Test:8443`, while the URL standard lowercases the host of a special scheme. A source comparing it with `example.test` would fail in a way that looks like a source bug. Hosts for `http`, `https`, `ws`, `wss` and `ftp` are now lowercased during construction and `host`/`origin`/`href` follow; non-special schemes keep their host as written. `TestURLPolyfillCoversWhatSourcesUse` covers both an uppercase host and a non-special scheme.
 
-`go vet ./...`, `go test -race -count=1 ./...` (22 packages) and `scripts/check-docs.sh` pass; logs `E:/Temp/core-url-host-vet.log`, `E:/Temp/core-url-host-test.log`, `E:/Temp/core-url-host-docs.log`. This changes Core's production behaviour, so both pins move to the commit carrying it on the next client build.
+`go vet ./...`, `go test -race -count=1 ./...` (22 packages) and `scripts/check-docs.sh` pass; logs `E:/Temp/core-url-host-vet.log`, `E:/Temp/core-url-host-test.log`, `E:/Temp/core-url-host-docs.log`. The official-source sweep also ran again on `4f213ff`: **34 scripts, 33 loaded, 1 failed**, still `jm` because its `init()` needs a live response (`TypeError: Cannot read properties of null (reading 'length')`), unrelated to host case; log `E:/Temp/core-sweep-4f213ff.log`. This changes Core's production behaviour, so both pins move to the commit carrying it on the next client build.
 
 ## The official-source sweep after the URL class (2026-11-03)
 
