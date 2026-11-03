@@ -64,7 +64,7 @@ Known deviations, which must be pinned down in the specification:
    The old Core document `HOST-AES.md` records that Swift currently uses an all-zero IV. Go version decision: keep "missing IV → null" and do **not** silently use a zero IV;
    also add an optional 4th parameter `iv` to the JS helper functions (an extension that does not break old calls).
 3. **RSA supports only private-key decryption**; encryption is always null.
-4. **GBK**: the official implementation uses `enough_convert`; Go uses `golang.org/x/text/encoding/simplifiedchinese.GBK`. The replacement behaviour for invalid bytes must be compared using fixtures.
+4. **GBK**: the official implementation uses `enough_convert`; Go uses `golang.org/x/text/encoding/simplifiedchinese.GBK`. Actual comparisons with enough_convert 1.6.0/1.7.1 default/permissive modes show differences in malformed-byte consumption, euro and private-use mappings; see [GBK compatibility](GBK-COMPATIBILITY.en.md). The official app version/options remain unconfirmed; the current Go decoding policy is retained.
 5. For `hmac`, an unknown `hash` throws in the official implementation → null.
 
 ### 1.6 `html` → see section 4 (DOM handle protocol)

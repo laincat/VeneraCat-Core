@@ -65,7 +65,7 @@ Go 版:保留 level,交宿主日志回调。
    旧 Core 文档 `HOST-AES.md` 记录 Swift 当前用全零 IV。Go 版决定:保持"缺 IV → null",**不**悄悄用零 IV;
    同时给 JS 辅助函数增加可选第 4 个参数 `iv`(扩展,不破坏旧调用)。
 3. **RSA 只有私钥解密**,加密永远 null。
-4. **GBK** 官方用 `enough_convert`;Go 用 `golang.org/x/text/encoding/simplifiedchinese.GBK`。非法字节的替换行为需用夹具对比。
+4. **GBK** 官方用 `enough_convert`;Go 用 `golang.org/x/text/encoding/simplifiedchinese.GBK`。已实际对照enough_convert 1.6.0/1.7.1的默认/容错模式,非法字节消耗、欧元及私用区映射存在差异;见 [GBK兼容边界](GBK-COMPATIBILITY.md)。官方App的精确版本/选项仍未确认,当前不改Go解码政策。
 5. `hmac` 的未知 `hash` 官方抛错→null。
 
 ### 1.6 `html` → 见第 4 节(DOM 句柄协议)

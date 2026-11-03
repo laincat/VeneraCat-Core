@@ -141,6 +141,7 @@ func TestHTTPThroughJS(t *testing.T) {
 	site := &fakeSite{routes: map[string]route{
 		"https://ex.test/json": {header: http.Header{"Content-Type": {"application/json"}}, body: `{"a":1}`},
 		"https://ex.test/bin":  {body: "\x00\x01\x02"},
+		"https://ex.test/gbk":  {body: "\xd6\xd0\xce\xc4"},
 		"https://ex.test/404":  {status: 404, body: "gone"},
 	}}
 	r, err := New(Options{}, Services{Transport: site, Env: Environment{AppVersion: "1.6.0", DefaultUA: "VC/1"}})
@@ -153,9 +154,10 @@ func TestHTTPThroughJS(t *testing.T) {
 		var b = await Network.fetchBytes("GET", "https://ex.test/bin", {});
 		var c = await Network.get("https://ex.test/404", {});
 		var f = await fetch("https://ex.test/json");
-		return [a.status, JSON.parse(a.body).a, new Uint8Array(b.body).length, c.status, f.ok, (await f.json()).a];
+		var gbk = await Network.fetchBytes("GET", "https://ex.test/gbk", {});
+		return [a.status, JSON.parse(a.body).a, new Uint8Array(b.body).length, c.status, f.ok, (await f.json()).a, Convert.decodeGbk(gbk.body)];
 	})()`)
-	if got != `[200,1,3,404,true,1]` {
+	if got != `[200,1,3,404,true,1,"中文"]` {
 		t.Fatal(got)
 	}
 	reqs := site.requests()

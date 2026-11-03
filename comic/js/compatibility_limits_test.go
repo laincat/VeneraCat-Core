@@ -114,10 +114,23 @@ func TestCompatibilityTextDecoderIsUTF8Only(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("gbk should be refused, got err %v", err)
 	}
-	// The convert route is reachable from a source, whatever it does with the
-	// bytes; a missing host function would throw here.
-	got, err = r.Eval(ctx, `typeof sendMessage`)
-	if err != nil || string(got) != `"function"` {
-		t.Fatalf("sendMessage: got %s, err %v", got, err)
+	// Exercise the source-facing bridge with known GBK bytes, rather than
+	// merely checking that sendMessage exists. Typed arrays must survive
+	// conversion across the JS/Go boundary in both directions.
+	for _, tc := range []struct{ name, script, want string }{
+		{"decode typed bytes", `Convert.decodeGbk(new Uint8Array([214,208,206,196]))`, `"中文"`},
+		{"decode array", `Convert.decodeGbk([214,208,206,196])`, `"中文"`},
+		{"invalid byte replacement", `Convert.decodeGbk(new Uint8Array([97,255,98]))`, `"a�b"`},
+		{"truncated sequence replacement", `Convert.decodeGbk(new Uint8Array([214]))`, `"�"`},
+		{"encode", `Array.from(new Uint8Array(Convert.encodeGbk("中文")))`, `[214,208,206,196]`},
+		{"unrepresentable character", `Convert.encodeGbk("🐾")`, `null`},
+		{"decode after failure", `Convert.decodeGbk([214,208])`, `"中"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := r.Eval(ctx, tc.script)
+			if err != nil || string(got) != tc.want {
+				t.Fatalf("got %s, want %s, err %v", got, tc.want, err)
+			}
+		})
 	}
 }
