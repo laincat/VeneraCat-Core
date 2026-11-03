@@ -229,11 +229,13 @@ result: rejected:context canceled
 
 The usage hook needs `AbortSignal.timeout`, which MoeJS does not provide, so the
 prelude adds a small `AbortSignal`/`AbortController`: a timeout sets `aborted`
-and runs its listeners. It does not pretend to cancel a request in flight.
+and runs its listeners. Cancellation reaches the host context; after an early response head, the listener remains attached until the body finishes or is cancelled.
 
-Streaming is wired too. When the client also implements
-`Streamer.DoStream(ctx, req, onChunk)`, fetch settles on the response head and
-pushes each chunk into the package's `ReadableStream`:
+Incremental plugin delivery requires `HeaderStreamer.DoStreamWithHead(ctx, req, onHead, onChunk)`,
+with a sequential head callback before body chunks. With only legacy Streamer.DoStream,
+fetch still waits for the method to return its status. Mobile clients may send
+status/headers/finalUrl in StreamOpen or the first StreamNext (a head-only chunk
+is allowed). Older clients supplying only final metadata retain delayed resolution.
 
 ```
 package: const r = await fetch(url); for await (const c of r.body) …

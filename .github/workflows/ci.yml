@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'fix/magpie-first-chunk']
   pull_request:
   workflow_dispatch:
 

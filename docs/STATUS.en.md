@@ -4,6 +4,18 @@ English | [简体中文](STATUS.md)
 
 Updated 2026-10-30. Results come from the Windows development machine and from GitHub Actions (Linux, Windows, macOS 26 with Xcode 26.6).
 
+## Pre-aborted fetch no longer starts host requests (2026-11-03)
+
+An additional cancellation gap was reproduced on the first-chunk candidate: when AbortController was already aborted before fetch, the whole-response path still sent a request and resolved successfully; legacy streaming and early-header paths also entered the host. The fix preserves the cancelled reservation and checks context before invoking either host path. Regression tests cover all three host types: pre-aborted fetch rejects with zero host calls, while the next normal request on the same instance runs exactly once and succeeds. Before-fix failures: `E:/Temp/core-magpie-preabort/before.log`. Targeted race, go vet and the full race suite pass: 22 packages, 565 PASS/0 FAIL/1 SKIP; TestRealSourceWnacg remains skipped because VC_WNACG_JS is unset. Logs and summary.json are in that directory. This is local Windows fake-host evidence, not Swift/UI or real-provider acceptance; it is not published to Core main or client pins.
+
+## Candidate Magpie first-chunk delivery fix (2026-11-03)
+
+Isolated branch `fix/magpie-first-chunk`, based on published `b55c1a4`, fixes plugin fetch waiting for body completion. Optional `HeaderStreamer.DoStreamWithHead` resolves fetch when response headers arrive. Mobile HostStream may provide status/headers/finalUrl in StreamOpen, the first body chunk, or a separate head-only chunk, without new gomobile methods. Legacy hosts supplying metadata only at completion remain compatible and retain delayed fetch timing. Abort listeners survive until the body ends and reader.cancel closes the actual request. Chunks are passed as Uint8Array bytes so split Chinese/emoji UTF-8 is not corrupted by per-chunk string conversion. End/error releases stream registration.
+
+Four regression groups failed before the fix, including delayed heads/first chunks, cancellation that could not run promptly and corrupted split UTF-8. Targeted race tests and the full 22-package suite now pass: 564 PASS/0 FAIL/1 SKIP, with TestRealSourceWnacg skipped because VC_WNACG_JS is unset. Actual loopback uses public mobile.Magpie, the repository provider template and a Go client: ChatNext receives first while the server holds the remaining body; cancelling all three blocking phases still closes the corresponding connection and a subsequent answer completes. The same script times out waiting for first text on b55c1a4. Logs under `E:/Temp/core-magpie-first-chunk-evidence/`: `before.log`, `targeted.log`, `race-summary.json`, `loopback-old.log` and `loopback-fixed.log`.
+
+This is local Windows Core-candidate evidence: unpublished, without cross-platform/Apple CI for this candidate, and neither client pin changed. Swift CoreStreamHost still supplies response headers only in the final chunk. Early-head delivery must be integrated there and pass Mac compilation plus actual HTTP/UI acceptance before claiming iOS streaming.
+
 ## Magpie chat cancellation only stopped the handle (2026-11-03)
 
 A real gap at `2c9c83b`: `Magpie.ChatCancel` removed the conversation handle and cancelled the chat's own context, while `Instance.Chat` issued requests under the instance context. After cancelling, a blocked whole-response `Host.HTTP`, `StreamOpen` or `StreamNext` kept running. The existing `TestMagpieChatCancelEndsIt` only checked that the handle disappeared, so it could not prove the request was closed.

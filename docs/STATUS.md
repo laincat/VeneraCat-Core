@@ -4,6 +4,18 @@
 
 更新:2026-10-30。以下结论来自 Windows 本机,以及 GitHub Actions(Linux、Windows、macOS 26 + Xcode 26.6)。
 
+## 预先取消的 fetch 不再启动宿主请求(2026-11-03)
+
+在首块交付候选上补出一个独立取消缺口:调用 fetch 前 AbortController 已取消,整包路径仍发起请求并成功返回;旧流式与提前响应头路径也进入了宿主。修复保留已取消的请求登记状态,并在整包/流式调用宿主前检查上下文。回归覆盖三种宿主:预取消请求均拒绝且宿主调用次数为 0,同一实例的下一条正常请求恰好执行一次并成功。修复前失败见 `E:/Temp/core-magpie-preabort/before.log`;定向 race、go vet 和全套 race 通过,22 包、565 PASS/0 FAIL/1 SKIP,跳过仍为未提供 VC_WNACG_JS 的 TestRealSourceWnacg。日志与 summary.json 在同目录。这是 Windows 本机伪宿主验证,不等于 Swift/UI 或真实供应商通过;尚未发布到 Core main 或客户端 pin。
+
+## Magpie 首块交付修复候选(2026-11-03)
+
+独立分支 `fix/magpie-first-chunk` 基于已发布 `b55c1a4`,修复插件 fetch 等正文结束才返回的问题。可选 `HeaderStreamer.DoStreamWithHead` 在响应头到达时兑现 fetch;mobile HostStream 可在 StreamOpen、首个带头块或独立头块中提供 status/headers/finalUrl,无需新增 gomobile 方法。旧宿主只在结束时给头仍兼容,其 fetch 仍延后。取消监听保留至正文结束,reader.cancel 会关闭实际请求;分块直接传递 Uint8Array,避免跨块中文/emoji 被逐块转字符串而损坏。结束与失败会释放流登记。
+
+修复前四组回归失败,包括首头/首块迟到、取消无法及时执行和跨块 UTF-8 乱码;修复后定向 race 与全套 22 包、564 PASS/0 FAIL/1 SKIP 通过,跳过为未设置 VC_WNACG_JS 的 TestRealSourceWnacg。真实 loopback 使用公开 mobile.Magpie、仓库供应商模板和 Go 客户端:在服务器扣住后续正文时 ChatNext 收到 first,取消三个阻塞阶段仍关闭对应连接,后续回答正常;同一脚本在 b55c1a4 上等待首段文字超时。日志 `E:/Temp/core-magpie-first-chunk-evidence/` 中的 `before.log`、`targeted.log`、`race-summary.json`、`loopback-old.log` 与 `loopback-fixed.log`。
+
+这是 Windows 本机 Core 候选证据,尚未发布、未做此候选跨平台/Apple CI,也未改两端 pin。当前 Swift CoreStreamHost 仍只在最终块交付响应头,需接入提前头部通知并经过 Mac 编译和真实 HTTP/UI 验收,不能据此声称 iOS 已流式。
+
 ## Magpie 聊天取消只停了句柄(2026-11-03)
 
 `2c9c83b` 上的真实缺口:`Magpie.ChatCancel` 只删掉会话句柄并取消聊天自己的上下文,而 `Instance.Chat` 发请求时用的是实例上下文。因此取消之后,阻塞中的整包 `Host.HTTP`、`StreamOpen` 与 `StreamNext` 都不会停止。原有 `TestMagpieChatCancelEndsIt` 只检查句柄消失,证明不了请求被关。

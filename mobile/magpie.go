@@ -457,6 +457,11 @@ func (h *mobileStreamHost) DoStream(ctx context.Context, req *magpieplugin.Reque
 	return bridge.DoStream(ctx, req, onChunk)
 }
 
+func (h *mobileStreamHost) DoStreamWithHead(ctx context.Context, req *magpieplugin.Request, onHead func(*magpieplugin.Response) error, onChunk func([]byte) error) (*magpieplugin.Response, error) {
+	bridge := streamBridge{h: h.stream, assign: nextHostRequestID}
+	return bridge.DoStreamWithHead(ctx, req, onHead, onChunk)
+}
+
 func (h *mobileHost) Do(ctx context.Context, req *magpieplugin.Request) (*magpieplugin.Response, error) {
 	// Reuse the wire contract and cancellation used by comic requests. In
 	// particular, Swift requires an id to decode the request and CancelHTTP must

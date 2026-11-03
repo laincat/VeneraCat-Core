@@ -23,14 +23,17 @@ import (
 // The protocol is a poll, because gomobile cannot call back into the client
 // from Go: StreamOpen returns an id, StreamNext returns one piece at a time,
 // and StreamClose releases it. Each call is blocking on the client's side, and
-// a chunk may be empty only when done is true.
+// a bodyless chunk may announce response headers or the end of the stream.
 type HostStream interface {
-	// StreamOpen sends the request and returns {"id": n}. The client must
-	// start reading the body without waiting for it to finish.
+	// StreamOpen sends the request and returns {"id": n}. It may also return
+	// status, headers and finalUrl once the response head is available.
+	// The client must not wait for the body to finish.
 	StreamOpen(requestJSON string) (string, error)
 	// StreamNext waits for the next piece and returns
 	// {"done":bool,"chunkBase64":"…","status":n,"headers":{…},"finalUrl":"…"}.
-	// status, headers and finalUrl are filled on the final call.
+	// For early fetch resolution, send status/headers/finalUrl before or with
+	// the first body chunk (a head-only chunk is allowed). Legacy clients may
+	// keep providing them only on the final call, with delayed fetch resolution.
 	StreamNext(id int64) (string, error)
 	// StreamClose aborts the request and releases it. It must unblock a pending
 	// StreamOpen or StreamNext. While StreamOpen is pending, id is the request
@@ -72,14 +75,21 @@ type streamBridge struct {
 // The request id comes from the same counter the non-streaming bridge uses, so
 // Swift's task table cannot confuse a stream with an ordinary request.
 func (s *streamBridge) DoStream(ctx context.Context, req *magpieplugin.Request, onChunk func([]byte) error) (*magpieplugin.Response, error) {
-	answer, err := s.send(ctx, "magpie", req.Method, req.URL, req.Header, req.Body, onChunk)
+	return s.DoStreamWithHead(ctx, req, nil, onChunk)
+}
+
+// DoStreamWithHead exposes response metadata before body completion when the
+// client supplies it. Older HostStream implementations retain their timing.
+func (s *streamBridge) DoStreamWithHead(ctx context.Context, req *magpieplugin.Request, onHead func(*magpieplugin.Response) error, onChunk func([]byte) error) (*magpieplugin.Response, error) {
+	var notify func(*streamAnswer) error
+	if onHead != nil {
+		notify = func(head *streamAnswer) error { return onHead(head.pluginResponse()) }
+	}
+	answer, err := s.sendWithHead(ctx, "magpie", req.Method, req.URL, req.Header, req.Body, notify, onChunk)
 	if err != nil {
 		return nil, err
 	}
-	return &magpieplugin.Response{
-		Status: answer.Status, StatusText: http.StatusText(answer.Status),
-		Header: answer.Header, URL: answer.URL,
-	}, nil
+	return answer.pluginResponse(), nil
 }
 
 // streamAnswer is what a finished stream reported about the reply itself: the
@@ -90,9 +100,17 @@ type streamAnswer struct {
 	URL    string
 }
 
+func (a *streamAnswer) pluginResponse() *magpieplugin.Response {
+	return &magpieplugin.Response{Status: a.Status, StatusText: http.StatusText(a.Status), Header: a.Header, URL: a.URL}
+}
+
 // send is the part both callers share. The partition is a parameter because a
 // plugin request and a standard AI request must not read each other's cookies.
 func (s *streamBridge) send(ctx context.Context, partition, method, target string, header http.Header, body []byte, onChunk func([]byte) error) (*streamAnswer, error) {
+	return s.sendWithHead(ctx, partition, method, target, header, body, nil, onChunk)
+}
+
+func (s *streamBridge) sendWithHead(ctx context.Context, partition, method, target string, header http.Header, body []byte, onHead func(*streamAnswer) error, onChunk func([]byte) error) (*streamAnswer, error) {
 	if s == nil || s.h == nil {
 		return nil, errors.New("mobile: this client cannot stream")
 	}
@@ -132,6 +150,7 @@ func (s *streamBridge) send(ctx context.Context, partition, method, target strin
 	}
 	var opened struct {
 		ID int64 `json:"id"`
+		streamChunk
 	}
 	if head != "" {
 		if err := json.Unmarshal([]byte(head), &opened); err != nil {
@@ -151,6 +170,23 @@ func (s *streamBridge) send(ctx context.Context, partition, method, target strin
 		closeStream()
 	}()
 
+	var answer *streamAnswer
+	acceptHead := func(chunk streamChunk) error {
+		if answer != nil || chunk.Status == 0 {
+			return nil
+		}
+		answer = &streamAnswer{Status: chunk.Status, Header: chunk.Headers, URL: chunk.FinalURL}
+		if onHead != nil {
+			return onHead(answer)
+		}
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := acceptHead(opened.streamChunk); err != nil {
+		return nil, err
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -165,6 +201,9 @@ func (s *streamBridge) send(ctx context.Context, partition, method, target strin
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(raw), &chunk); err != nil {
 			return nil, fmt.Errorf("mobile: host stream chunk: %w", err)
+		}
+		if err := acceptHead(chunk); err != nil {
+			return nil, err
 		}
 		if chunk.Error != "" {
 			return nil, errors.New(chunk.Error)
@@ -182,7 +221,10 @@ func (s *streamBridge) send(ctx context.Context, partition, method, target strin
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			return &streamAnswer{Status: chunk.Status, Header: chunk.Headers, URL: chunk.FinalURL}, nil
+			if answer == nil {
+				return nil, errors.New("mobile: host stream ended without response status")
+			}
+			return answer, nil
 		}
 	}
 }

@@ -197,10 +197,12 @@ fake host 阻塞在 ctx.Done()
 
 用量 hook 要求 `AbortSignal.timeout`,而 MoeJS 不提供它,所以 prelude 补了
 最小可用的 `AbortSignal`/`AbortController`:超时能触发 `aborted` 与监听器,
-不假装支持请求中途取消。
+请求取消会传至宿主上下文;提前收到响应头后,监听器一直保留到正文结束或取消。
 
-流式输出也接上了。客户端若额外实现 `Streamer.DoStream(ctx, req, onChunk)`,
-fetch 会先拿到响应头,再把每个分块推进插件的 `ReadableStream`:
+插件增量交付要求额外实现 `HeaderStreamer.DoStreamWithHead(ctx, req, onHead, onChunk)`,
+在首个正文块之前顺序通知响应头。仅实现旧 `Streamer.DoStream` 时,fetch 仍等方法返回才有状态。
+mobile 客户端可在 StreamOpen 或首个 StreamNext(允许头部单独成块)提供 status/headers/finalUrl;
+只在最终块给头的旧客户端继续保持延后返回。
 
 ```
 package: const r = await fetch(url); for await (const c of r.body) …

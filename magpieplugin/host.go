@@ -38,6 +38,15 @@ type Streamer interface {
 	DoStream(ctx context.Context, req *Request, onChunk func([]byte) error) (*Response, error)
 }
 
+// HeaderStreamer adds early response metadata to Streamer. Call onHead once,
+// before onChunk, as soon as headers arrive; call both callbacks sequentially.
+// Without this optional interface fetch must wait for DoStream to return its
+// response metadata. Existing Streamer implementations remain supported.
+type HeaderStreamer interface {
+	Streamer
+	DoStreamWithHead(ctx context.Context, req *Request, onHead func(*Response) error, onChunk func([]byte) error) (*Response, error)
+}
+
 // Host is what a client must provide for a package that uses the network.
 // Do must honour ctx cancellation; a cancelled context should come back as an
 // error, which rejects the package's fetch.
@@ -83,9 +92,9 @@ const prelude = `(() => {
   }
   class ReadableStream {
     constructor() { this._c = []; this._w = []; this._done = false; this._err = null }
-    _push(text) { if (this._done) return; this._c.push(text); this._wake() }
-    _close() { this._done = true; this._wake() }
-    _fail(e) { this._err = e; this._done = true; this._wake() }
+    _push(bytes) { if (this._done) return; this._c.push(bytes); this._wake() }
+    _close() { if (this._done) return; this._done = true; if (this._finish) this._finish(); this._wake() }
+    _fail(e) { if (this._done) return; this._err = e; this._close() }
     _wake() { while (this._w.length && (this._c.length || this._done || this._err)) this._w.shift()() }
     getReader() {
       const self = this
@@ -98,7 +107,7 @@ const prelude = `(() => {
       }
       return {
         read,
-        async cancel() { self._done = true; self._wake() },
+        async cancel() { self._c = []; self._close(); if (self._cancel) self._cancel() },
         releaseLock() {},
       }
     }
@@ -204,8 +213,7 @@ const prelude = `(() => {
   globalThis.AbortController = AbortController
   const streams = new Map()
   globalThis.__magpieStreams = streams
-  const encoder = new TextEncoder()
-  const push = (id, text) => { const s = streams.get(id); if (s) s._push(encoder.encode(text)) }
+  const push = (id, bytes) => { const s = streams.get(id); if (s) s._push(new Uint8Array(bytes)) }
   const close = (id) => { const s = streams.get(id); if (s) s._close() }
   const fail = (id, message) => {
     const s = streams.get(id)
@@ -247,20 +255,30 @@ const prelude = `(() => {
       if (signal.aborted) onAbort()
       else signal.addEventListener("abort", onAbort)
     }
+    const cleanup = () => {
+      streams.delete(id)
+      if (onAbort) signal.removeEventListener("abort", onAbort)
+    }
+    let bodyPending = false
     try {
       const method = String(opts.method || "GET").toUpperCase()
       if (__hostCanStream()) {
         const stream = new ReadableStream()
-        __magpieStreams.set(id, stream)
+        stream._finish = cleanup
+        stream._cancel = () => __hostAbort(id)
+        streams.set(id, stream)
         const head = await __hostFetchStream(id, target, method, pairs, body)
-        if (head.error) { __magpieStreams.delete(id); throw new Error(head.error) }
+        if (head.error) { stream._fail(new Error(head.error)); throw new Error(head.error) }
+        bodyPending = !stream._done
         return new Response(head, stream)
       }
       const r = await __hostFetch(id, target, method, pairs, body)
       if (r.error) throw new Error(r.error)
       return new Response(r)
     } finally {
-      if (onAbort) signal.removeEventListener("abort", onAbort)
+      // fetch can finish at the headers; abort remains attached until the
+      // body closes, fails or its reader cancels.
+      if (!bodyPending) cleanup()
     }
   }
   return { push, close, fail }
@@ -352,8 +370,12 @@ func (in *Instance) hostFetchStream(_ *moejs.Realm, _ moejs.Value, args []moejs.
 	done := in.loop.Hold()
 	ctx, cancel := context.WithCancel(in.ctx)
 	in.mu.Lock()
+	_, reserved := in.pending[id]
 	in.pending[id] = cancel
 	in.mu.Unlock()
+	if !reserved { // An already-aborted signal cancelled the reservation.
+		cancel()
+	}
 	go func() {
 		defer done(nil)
 		defer func() {
@@ -362,42 +384,80 @@ func (in *Instance) hostFetchStream(_ *moejs.Realm, _ moejs.Value, args []moejs.
 			delete(in.pending, id)
 			in.mu.Unlock()
 		}()
-		onChunk := func(chunk []byte) error {
-			text := string(chunk)
-			var pushErr error
-			posted := in.loop.RunOnLoop(func(rt *moejs.Runtime) {
-				if _, err := rt.CallFunction(in.streamPush, moejs.Undefined(), moejs.Int(id), moejs.String(text)); err != nil {
-					pushErr = err
-				}
-			})
-			if !posted {
-				return fmt.Errorf("magpieplugin: the instance is closed")
+		headSent := false
+		onHead := func(head *Response) error {
+			if err := ctx.Err(); err != nil {
+				return err
 			}
-			return pushErr
-		}
-		head, err := streamer.DoStream(ctx, req, onChunk)
-		// The stream ends (or fails) on the loop, after the head settled.
-		in.loop.RunOnLoop(func(rt *moejs.Runtime) {
-			if err != nil {
-				_, _ = rt.CallFunction(in.streamFail, moejs.Undefined(), moejs.Int(id), moejs.String(err.Error()))
-				return
+			if head == nil {
+				return fmt.Errorf("magpieplugin: stream returned no response")
 			}
-			_, _ = rt.CallFunction(in.streamClose, moejs.Undefined(), moejs.Int(id))
-		})
-		settle(func(rt *moejs.Runtime) (moejs.Value, error) {
-			if err != nil && head == nil {
-				return rt.FromGo(map[string]any{"error": err.Error()})
+			if headSent {
+				return nil
 			}
+			headSent = true
 			headers := make([][2]string, 0, len(head.Header))
 			for k, vs := range head.Header {
 				for _, v := range vs {
 					headers = append(headers, [2]string{k, v})
 				}
 			}
-			return rt.FromGo(map[string]any{
-				"status": head.Status, "statusText": head.StatusText,
-				"headers": headers, "url": head.URL, "stream": true,
+			fields := map[string]any{"status": head.Status, "statusText": head.StatusText,
+				"headers": headers, "url": head.URL, "stream": true}
+			settle(func(rt *moejs.Runtime) (moejs.Value, error) { return rt.FromGo(fields) })
+			return nil
+		}
+		onChunk := func(chunk []byte) error {
+			// FromGo adopts byte slices. Copy before handing ownership to JS;
+			// decoding chunks as strings would corrupt split UTF-8 characters.
+			body := append([]byte(nil), chunk...)
+			pushed := make(chan error, 1)
+			posted := in.loop.RunOnLoop(func(rt *moejs.Runtime) {
+				value, err := rt.FromGo(body)
+				if err == nil {
+					_, err = rt.CallFunction(in.streamPush, moejs.Undefined(), moejs.Int(id), value)
+				}
+				pushed <- err
 			})
+			if !posted {
+				return fmt.Errorf("magpieplugin: the instance is closed")
+			}
+			select {
+			case err := <-pushed:
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		var head *Response
+		err := ctx.Err()
+		if err == nil {
+			if early, ok := streamer.(HeaderStreamer); ok {
+				head, err = early.DoStreamWithHead(ctx, req, onHead, onChunk)
+			} else {
+				head, err = streamer.DoStream(ctx, req, onChunk)
+			}
+		}
+		if !headSent {
+			if head != nil || err == nil {
+				if headErr := onHead(head); headErr != nil {
+					err = headErr
+				}
+			}
+			if !headSent {
+				settle(func(rt *moejs.Runtime) (moejs.Value, error) {
+					return rt.FromGo(map[string]any{"error": err.Error()})
+				})
+			}
+		}
+		// Head settlement is queued before end/error, so a later body failure
+		// reaches the reader without turning a successful fetch into a rejection.
+		in.loop.RunOnLoop(func(rt *moejs.Runtime) {
+			if err != nil {
+				_, _ = rt.CallFunction(in.streamFail, moejs.Undefined(), moejs.Int(id), moejs.String(err.Error()))
+				return
+			}
+			_, _ = rt.CallFunction(in.streamClose, moejs.Undefined(), moejs.Int(id))
 		})
 	}()
 	return promise, nil
@@ -461,8 +521,12 @@ func (in *Instance) hostFetch(_ *moejs.Realm, _ moejs.Value, args []moejs.Value)
 	done := in.loop.Hold()
 	ctx, cancel := context.WithCancel(in.ctx)
 	in.mu.Lock()
+	_, reserved := in.pending[id]
 	in.pending[id] = cancel
 	in.mu.Unlock()
+	if !reserved {
+		cancel()
+	}
 	go func() {
 		defer done(nil)
 		defer func() {
@@ -471,7 +535,11 @@ func (in *Instance) hostFetch(_ *moejs.Realm, _ moejs.Value, args []moejs.Value)
 			delete(in.pending, id)
 			in.mu.Unlock()
 		}()
-		resp, err := in.host.Do(ctx, req)
+		var resp *Response
+		err := ctx.Err()
+		if err == nil {
+			resp, err = in.host.Do(ctx, req)
+		}
 		settle(func(rt *moejs.Runtime) (moejs.Value, error) {
 			if err != nil {
 				return rt.FromGo(map[string]any{"error": err.Error()})
