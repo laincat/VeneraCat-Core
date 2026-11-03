@@ -157,6 +157,8 @@ The chunk bridge previously registered cancellation only after `StreamOpen` retu
 
 After the fix, `go vet ./...` and `go test -race -count=1 ./...` pass across all 22 packages, as do paired-document and English-error checks. Full logs: `E:/Temp/core-ai-stream-vet.log`, `E:/Temp/core-ai-stream-race.log`, `E:/Temp/core-ai-stream-docs.log`, `E:/Temp/core-ai-stream-errors.log`.
 
+The fix is fast-forwarded into main at `b5312596045caa8aa4cd8837b8f9ece84257bc4c`. CI `41589616003` succeeded on the Ubuntu, Windows and macOS 26 Go jobs (`gofmt`, `vet`, `test`, shuffled `test`, `docs`, English error text); Ubuntu and macOS run every check while Windows skips `gofmt` and `docs` per its existing configuration, not because of this change.
+
 These are fake-host protocol and lifetime regressions, not real-provider, first-network-chunk or streaming-UI evidence. The branch is not integrated into main or client pins; SDK and consumer validation remain pending.
 
 ## Streamed decoding for the standard protocols (2026-11-03)

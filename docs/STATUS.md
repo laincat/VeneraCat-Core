@@ -158,6 +158,8 @@ CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`�
 
 修复后 `go vet ./...` 与 `go test -race -count=1 ./...` 全部通过(22 个包),文档配对与英文错误文本检查通过。完整日志 `E:/Temp/core-ai-stream-vet.log`、`E:/Temp/core-ai-stream-race.log`、`E:/Temp/core-ai-stream-docs.log`、`E:/Temp/core-ai-stream-errors.log`。
 
+该修复已快进合入 main,提交 `b5312596045caa8aa4cd8837b8f9ece84257bc4c`。CI `41589616003` 的 Ubuntu、Windows 与 macOS 26 三个 Go job 均成功(`gofmt`/`vet`/`test`/打乱顺序的 `test`/`docs`/英文错误文本);Ubuntu 与 macOS 跑全部检查,Windows 上 `gofmt` 与 `docs` 按配置跳过,属于既有平台差异而非本轮改动。
+
 这是伪宿主的协议与生命周期回归,不证明真实供应商、网络首块时序或流式界面。该分支尚未整合到 main 或客户端 pin,仍需后续 SDK 与消费端验证。
 
 ## 标准接口的流式解码(2026-11-03)
