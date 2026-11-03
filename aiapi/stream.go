@@ -5,9 +5,8 @@ package aiapi
 // The three protocols all use server-sent events, but they disagree on what an
 // event means: Chat Completions puts the next words in choices[0].delta.content,
 // Responses emits output_text.delta events, and Messages nests a text_delta in
-// content_block_delta. Only the text is extracted here — tool calls, reasoning
-// blocks and usage stay in the raw bytes the client already receives, because a
-// caller that needs them can parse the event itself.
+// content_block_delta. Only the text is extracted here; tool calls, reasoning
+// blocks and usage are not returned by this decoder.
 //
 // A network chunk is not an event. One chunk may carry half a line, and one
 // event may arrive over several chunks, so the decoder buffers until a blank
@@ -34,7 +33,8 @@ type StreamDecoder struct {
 	// pending holds the bytes of the line being read.
 	pending []byte
 	// data collects the data lines of the event being read.
-	data []string
+	data      []string
+	dataBytes int
 	// done records that the provider said the answer is complete.
 	done bool
 }
@@ -76,11 +76,16 @@ func (d *StreamDecoder) Push(chunk []byte) ([]string, error) {
 			continue
 		}
 		if strings.HasPrefix(line, "data:") {
-			d.data = append(d.data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+			value := strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
+			d.dataBytes += len(value) + 1
+			if d.dataBytes > maxStreamEvent {
+				return out, errors.New("aiapi: the stream sent an event larger than 1 MiB")
+			}
+			d.data = append(d.data, value)
 		}
 		// event:, id:, retry: and comments carry nothing this decoder needs.
 	}
-	if len(d.pending)+len(d.data) > maxStreamEvent {
+	if len(d.pending)+d.dataBytes > maxStreamEvent {
 		return out, errors.New("aiapi: the stream sent an event larger than 1 MiB")
 	}
 	return out, nil
@@ -93,6 +98,7 @@ func (d *StreamDecoder) dispatch() (string, error) {
 	}
 	payload := strings.Join(d.data, "\n")
 	d.data = d.data[:0]
+	d.dataBytes = 0
 	if payload == "[DONE]" {
 		d.done = true
 		return "", nil

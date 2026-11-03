@@ -115,6 +115,20 @@ func TestStreamDecoderRejectsBrokenEvent(t *testing.T) {
 	}
 }
 
+func TestStreamDecoderBoundsMultilineEvent(t *testing.T) {
+	d, err := NewStreamDecoder(Chat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := "data: " + strings.Repeat("x", 600000) + "\n"
+	if _, err := d.Push([]byte(line)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Push([]byte(line)); err == nil {
+		t.Fatal("oversized multiline event was accepted")
+	}
+}
+
 func TestNewStreamDecoderRejectsUnknownProtocol(t *testing.T) {
 	if _, err := NewStreamDecoder("grpc"); err == nil {
 		t.Fatal("unknown protocol accepted")

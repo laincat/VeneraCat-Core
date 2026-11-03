@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/laincat/veneracat-core/magpieplugin"
 )
@@ -126,13 +127,22 @@ func (s *streamBridge) send(ctx context.Context, partition, method, target strin
 	if opened.ID != 0 {
 		id = opened.ID
 	}
-	defer s.h.StreamClose(id)
+	var closeOnce sync.Once
+	closeStream := func() { closeOnce.Do(func() { s.h.StreamClose(id) }) }
+	stopClose := context.AfterFunc(ctx, closeStream)
+	defer func() {
+		stopClose()
+		closeStream()
+	}()
 
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		raw, err := s.h.StreamNext(id)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if err != nil {
 			return nil, err
 		}

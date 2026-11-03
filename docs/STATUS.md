@@ -154,7 +154,7 @@ CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`�
 
 `aiapi` 新增 SSE 解码器与 `RequireStream`,mobile 侧新增 `NewWithStream` 与 `SendAIRequestStream`:标准协议的回答现在可以边收边解析成文本,不再只有「整包」一种口径。
 
-- **事件形状不同,边界相同**:三种协议的 SSE 都是「`data:` 行 + 空行收尾」,但 `chat` 的文本在 `choices[0].delta.content`,`responses` 在 `output_text.delta` 事件里,`messages` 在 `content_block_delta` 的 `text_delta` 里。解码器只取文本增量;工具调用、推理块与用量留在原始字节里,需要的人自己解析事件。
+- **事件形状不同,边界相同**:三种协议的 SSE 都是「`data:` 行 + 空行收尾」,但 `chat` 的文本在 `choices[0].delta.content`,`responses` 在 `output_text.delta` 事件里,`messages` 在 `content_block_delta` 的 `text_delta` 里。解码器只取文本增量;此接口仅返回汇总文本,不返回工具调用、推理块、用量或原始事件,也不能向界面逐块推送。
 - **分块不是事件**:一次读取可能只拿到半行,也可能一次拿到多个事件。解码器按空行收尾事件、跨块缓冲,超过 1 MiB 仍未收尾就报错,避免一个不发空行的供应商把内存吃光。
 - **结束与错误分开**:`[DONE]`、`response.completed`、`message_stop` 标记结束;供应商的错误事件(`{"error":{...}}`)直接作为错误抛出,不会被当成「答完了但没字」。
 - **调用方错误要说清楚**:正文缺 `"stream":true` 时直接报错——供应商没被要求流式时只回一个 JSON 对象,解析结果是空文本,看起来像供应商沉默。用 `New`(而非 `NewWithStream`)建出来的 Core 会报 `cannot stream`,而不是假装流式。

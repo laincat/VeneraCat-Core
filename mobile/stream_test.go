@@ -13,6 +13,44 @@ import (
 	"github.com/laincat/veneracat-core/magpieplugin"
 )
 
+type blockingStreamHost struct {
+	streamHostStub
+	started chan struct{}
+	closed  chan struct{}
+}
+
+func (h *blockingStreamHost) StreamNext(int64) (string, error) {
+	close(h.started)
+	<-h.closed
+	return "", errors.New("closed")
+}
+
+func (h *blockingStreamHost) StreamClose(int64) {
+	close(h.closed)
+}
+
+func TestStreamBridgeCancellationUnblocksPendingRead(t *testing.T) {
+	h := &blockingStreamHost{started: make(chan struct{}), closed: make(chan struct{})}
+	h.setChunks([]string{"unused"})
+	bridge := streamBridge{h: h, assign: nextHostRequestID}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := bridge.DoStream(ctx, &magpieplugin.Request{Method: "POST", URL: "https://gw.test/v1/chat/completions"}, func([]byte) error { return nil })
+		result <- err
+	}()
+	<-h.started
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation did not unblock StreamNext")
+	}
+}
+
 // sseLine wraps one JSON payload as an SSE data line.
 func sseLine(payload string) string { return "data: " + payload + "\n\n" }
 

@@ -80,5 +80,5 @@ config JSON 是 `{"protocol":"chat|responses|messages","baseUrl":"","apiKey":"..
 
 `SendAIRequestStream` 必须建在一个用 `NewWithStream(configJSON, host, stream)` 建立的 Core 上;用 `New` 建出来的实例会明确报 `cannot stream`,而不是把 SSE 当整包读成空回答。正文缺 `"stream":true` 时同样直接报错——供应商没被要求流式时只回一个 JSON 对象,解析出来是空文本,看起来像供应商沉默。
 
-解码只取文本增量:`chat` 读 `choices[0].delta.content`,`responses` 读 `output_text.delta` 事件,`messages` 读 `content_block_delta` 里的 `text_delta`;工具调用、推理块与用量留在原始字节里,需要的人可以自己解析事件。网络分块与事件边界不对齐,解码器按空行收尾事件、跨块缓冲;`[DONE]`、`response.completed`、`message_stop` 表示结束,供应商的错误事件当错误抛出而不是当作空回答。
+解码只取文本增量:`chat` 读 `choices[0].delta.content`,`responses` 读 `output_text.delta` 事件,`messages` 读 `content_block_delta` 里的 `text_delta`;此接口只返回汇总文本,不返回工具调用、推理块、用量或原始事件;也不能向界面逐块推送。网络分块与事件边界不对齐,解码器按空行收尾事件、跨块缓冲;`[DONE]`、`response.completed`、`message_stop` 表示结束,供应商的错误事件当错误抛出而不是当作空回答。
 
