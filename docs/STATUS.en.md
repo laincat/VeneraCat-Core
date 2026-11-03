@@ -4,6 +4,20 @@ English | [简体中文](STATUS.md)
 
 Updated 2026-10-30. Results come from the Windows development machine and from GitHub Actions (Linux, Windows, macOS 26 with Xcode 26.6).
 
+## Magpie chat cancellation only stopped the handle (2026-11-03)
+
+A real gap at `2c9c83b`: `Magpie.ChatCancel` removed the conversation handle and cancelled the chat's own context, while `Instance.Chat` issued requests under the instance context. After cancelling, a blocked whole-response `Host.HTTP`, `StreamOpen` or `StreamNext` kept running. The existing `TestMagpieChatCancelEndsIt` only checked that the handle disappeared, so it could not prove the request was closed.
+
+Isolated branch `fix/magpie-chat-cancel` starts from public-entry negative regressions. `mobile/magpie_chat_cancel_test.go` uses Core's own `openai-compatible` template and the real `mobile` API, with hosts blocking in HTTP or `StreamOpen`; before the fix neither received `CancelHTTP`/`StreamClose` (`E:/Temp/nk-magpie-cancel-evidence/before.log`). The fix:
+
+- Each chat owns its runtime. `ChatCancel` cancels its context and closes that instance instead of relying on the shared instance context. The shared instance still serves `Models`, sign-in and usage.
+- A refreshed credential is written back to `Magpie.auth`, so the independent chat's next `auth.get`, later chats and existing model/sign-in hooks all see it; the provider bound to the runtime must still match.
+- Instance creation builds without holding the lock and rechecks `closed` plus any existing instance on registration, so only one shared instance is retained after concurrent creation and nothing is registered after close. `ChatStart` registers its handle before launching the goroutine so `Close` can see and stop it, and event writes respect cancellation instead of blocking on an unread channel.
+
+Five targeted race cases pass afterwards. `mobile/magpie_chat_lifecycle_test.go` covers cancelling one chat without stopping another, later chats continuing, an existing model hook reusing the refreshed credential (refresh happens once), and a blocked `StreamNext` being closed (logs `focused-after.log`, `chat-lifecycle-fixed-host.log`). That covers all three blocking stages plus refresh and isolation against the real package template. The supplementary case first failed because its host compared `Authorization` case-sensitively; the host now follows HTTP header semantics and the original failure log `chat-lifecycle.log` is kept.
+
+The full `go vet ./...` and `go test -race -count=1 -json ./...` with real package fixtures pass: 22 packages, 559 PASS / 0 FAIL / 1 SKIP at top level (`race.log`, `race-summary.json`; the SKIP is `TestRealSourceWnacg` with `VC_WNACG_JS` unset, not a pass). The execution channel is Windows with fake hosts and local third-party package fixtures, not iOS UI, devices or a real vendor, and no client pin changed.
+
 ## Implemented
 
 | Package | Contents |

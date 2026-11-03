@@ -41,7 +41,8 @@ type Magpie struct {
 	// options are the plugin's own switches, keyed "provider|option".
 	options map[string]bool
 
-	// chats holds the conversations this runner is delivering, by handle.
+	// Each chat owns a runtime so cancellation can close its fetches without
+	// interrupting another conversation or a model/sign-in hook.
 	chats    map[int64]*chatStream
 	chatNext int64
 }
@@ -378,30 +379,54 @@ func (m *Magpie) instance(loader *magpieplugin.Loader) (*magpieplugin.Instance, 
 		m.mu.Unlock()
 		return inst, nil
 	}
-	provider, auth, host := m.provider, m.auth, m.host
 	m.mu.Unlock()
+	inst, err := m.makeInstance(loader)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		inst.Close()
+		return nil, ErrMagpieClosed
+	}
+	if existing := m.inst; existing != nil {
+		m.mu.Unlock()
+		inst.Close()
+		return existing, nil
+	}
+	m.inst = inst
+	m.mu.Unlock()
+	return inst, nil
+}
 
+// makeInstance builds an independent runtime. Chats keep their own; ordinary
+// hooks retain the shared instance through instance above.
+func (m *Magpie) makeInstance(loader *magpieplugin.Loader) (*magpieplugin.Instance, error) {
+	m.mu.Lock()
+	provider, host, stream, options, closed := m.provider, m.host, m.stream, m.options, m.closed
+	m.mu.Unlock()
+	if closed {
+		return nil, ErrMagpieClosed
+	}
 	inst, err := loader.NewInstance(magpieplugin.Options{})
 	if err != nil {
 		return nil, err
 	}
 	var pluginHost magpieplugin.Host = &mobileHost{host: host}
-	if m.stream != nil {
-		pluginHost = &mobileStreamHost{mobileHost: mobileHost{host: host}, stream: m.stream}
+	if stream != nil {
+		pluginHost = &mobileStreamHost{mobileHost: mobileHost{host: host}, stream: stream}
 	}
 	if err := inst.UseHost(pluginHost); err != nil {
 		inst.Close()
 		return nil, err
 	}
 	if provider != "" {
-		if err := inst.UseClient(provider, &mobileAuth{m: m, provider: provider, initial: auth}); err != nil {
+		if err := inst.UseClient(provider, &mobileAuth{m: m, provider: provider}); err != nil {
 			inst.Close()
 			return nil, err
 		}
 	}
-	m.mu.Lock()
-	options := m.options
-	m.mu.Unlock()
 	if options != nil {
 		inst.SetPluginOptions(options)
 	}
@@ -411,14 +436,6 @@ func (m *Magpie) instance(loader *magpieplugin.Loader) (*magpieplugin.Instance, 
 		inst.Close()
 		return nil, err
 	}
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		inst.Close()
-		return nil, ErrMagpieClosed
-	}
-	m.inst = inst
-	m.mu.Unlock()
 	return inst, nil
 }
 
@@ -463,20 +480,27 @@ func (h *mobileHost) Do(ctx context.Context, req *magpieplugin.Request) (*magpie
 type mobileAuth struct {
 	m        *Magpie
 	provider string
-	initial  map[string]any
 }
 
 func (a *mobileAuth) Get(context.Context, string) (map[string]any, error) {
 	a.m.mu.Lock()
 	defer a.m.mu.Unlock()
-	return a.initial, nil
+	if a.m.provider != a.provider {
+		return nil, errors.New("mobile: the provider changed during the operation")
+	}
+	return a.m.auth, nil
 }
 
 func (a *mobileAuth) Set(_ context.Context, _ string, value map[string]any) error {
 	a.m.mu.Lock()
 	defer a.m.mu.Unlock()
+	if a.m.provider != a.provider {
+		return errors.New("mobile: the provider changed during the operation")
+	}
+	// A refresh from any runtime is the account's current credential. The
+	// next chat and existing model/sign-in hooks must all see that value.
+	a.m.auth = value
 	a.m.saved = value
-	a.initial = value
 	return nil
 }
 
@@ -492,9 +516,8 @@ func (a *mobileAuth) Set(_ context.Context, _ string, value map[string]any) erro
 // The handle comes back as JSON rather than as a second return value: gomobile
 // turns extra returns into out-parameters, which Swift has to pass pointers for.
 func (m *Magpie) ChatStart(model, messagesJSON, system string, maxTokens int) (string, error) {
-	inst, err := m.use()
-	if err != nil {
-		return "", err
+	if m == nil {
+		return "", ErrMagpieClosed
 	}
 	var messages []magpieplugin.Message
 	if strings.TrimSpace(messagesJSON) != "" {
@@ -504,11 +527,42 @@ func (m *Magpie) ChatStart(model, messagesJSON, system string, maxTokens int) (s
 	}
 	req := &magpieplugin.ChatRequest{Model: model, Messages: messages, System: system, MaxTokens: maxTokens}
 
+	m.mu.Lock()
+	loader, closed := m.loader, m.closed
+	m.mu.Unlock()
+	if closed {
+		return "", ErrMagpieClosed
+	}
+	if loader == nil {
+		return "", errors.New("mobile: no package loaded")
+	}
+	inst, err := m.makeInstance(loader)
+	if err != nil {
+		return "", err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	stream := &chatStream{events: make(chan string, 64), cancel: cancel}
+	stream := &chatStream{events: make(chan string, 64), cancel: sync.OnceFunc(func() {
+		cancel()
+		inst.Close()
+	})}
+	// Register before launching: Close must see this runtime even if it races
+	// ChatStart. A rejected registration must also dispose of the runtime.
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		stream.cancel()
+		return "", ErrMagpieClosed
+	}
+	if m.chats == nil {
+		m.chats = map[int64]*chatStream{}
+	}
+	m.chatNext++
+	handle := m.chatNext
+	m.chats[handle] = stream
+	m.mu.Unlock()
 	go func() {
 		defer close(stream.events)
-		defer cancel()
+		defer stream.cancel()
 		err := inst.Chat(ctx, req, func(e magpieplugin.Event) error {
 			body, marshalErr := chatEventJSON(e)
 			if marshalErr != nil {
@@ -523,19 +577,17 @@ func (m *Magpie) ChatStart(model, messagesJSON, system string, maxTokens int) (s
 		})
 		if err != nil && ctx.Err() == nil {
 			body, _ := json.Marshal(map[string]string{"kind": "error", "text": err.Error()})
-			stream.events <- string(body)
+			select {
+			case stream.events <- string(body):
+			case <-ctx.Done():
+				return
+			}
 		}
-		stream.events <- `{"kind":"end"}`
+		select {
+		case stream.events <- `{"kind":"end"}`:
+		case <-ctx.Done():
+		}
 	}()
-
-	m.mu.Lock()
-	if m.chats == nil {
-		m.chats = map[int64]*chatStream{}
-	}
-	m.chatNext++
-	handle := m.chatNext
-	m.chats[handle] = stream
-	m.mu.Unlock()
 	return fmt.Sprintf(`{"id":%d}`, handle), nil
 }
 

@@ -4,6 +4,20 @@
 
 更新:2026-10-30。以下结论来自 Windows 本机,以及 GitHub Actions(Linux、Windows、macOS 26 + Xcode 26.6)。
 
+## Magpie 聊天取消只停了句柄(2026-11-03)
+
+`2c9c83b` 上的真实缺口:`Magpie.ChatCancel` 只删掉会话句柄并取消聊天自己的上下文,而 `Instance.Chat` 发请求时用的是实例上下文。因此取消之后,阻塞中的整包 `Host.HTTP`、`StreamOpen` 与 `StreamNext` 都不会停止。原有 `TestMagpieChatCancelEndsIt` 只检查句柄消失,证明不了请求被关。
+
+隔离分支 `fix/magpie-chat-cancel` 先写公开入口的负向回归:`mobile/magpie_chat_cancel_test.go` 用 Core 自己的 `openai-compatible` 模板和真实 `mobile` API,让宿主阻塞在 HTTP 或 `StreamOpen`,确认修复前两条都收不到 `CancelHTTP`/`StreamClose`(`E:/Temp/nk-magpie-cancel-evidence/before.log`)。修复内容:
+
+- 每个聊天使用独立运行时,`ChatCancel` 取消它的上下文并 `Close` 该实例,不再借用共享实例上下文。共享实例仍服务 `Models`、登录与用量。
+- 刷新后的凭据写回 `Magpie.auth`,独立聊天的下一次 `auth.get`、后续聊天以及已存在的模型/登录钩子都能看到新值;运行时绑定的 provider 必须仍匹配。
+- 实例创建改为不持锁构建,并在注册时复查 `closed` 与已有实例,并发创建时只保留一个共享实例,关闭后不再写入。`ChatStart` 先登记句柄再启动 goroutine,`Close` 能看见并停止它;写事件也响应取消,不再向无人读取的通道阻塞。
+
+修复后五条定向 race 用例通过:`mobile/magpie_chat_lifecycle_test.go` 覆盖取消一个聊天不影响另一个、后续聊天继续、已存在的模型钩子复用刷新后的凭据(仅刷新一次),以及阻塞的 `StreamNext` 被关闭(日志 `focused-after.log`、`chat-lifecycle-fixed-host.log`)。这条覆盖整包、打开、读取三个阻塞阶段,并把刷新与隔离放在真实包模板上。补充用例初次失败是测试宿主按大小写精确匹配 `Authorization`,已按 HTTP 头语义修正;原失败日志 `chat-lifecycle.log` 保留。
+
+全套 `go vet ./...` 与带真实包夹具的 `go test -race -count=1 -json ./...` 通过:22 个包,顶层 559 PASS / 0 FAIL / 1 SKIP(`race.log`、`race-summary.json`;SKIP 是未设置 `VC_WNACG_JS` 的 `TestRealSourceWnacg`,不是通过)。执行渠道是 Windows 假宿主与本地第三方包夹具,不是 iOS UI、真机或真实供应商;客户端 pin 未变。
+
 ## 已实现
 
 | 包 | 内容 |
