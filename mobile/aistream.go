@@ -32,9 +32,9 @@ type aiStreams struct {
 var aiStreamRegistry = &aiStreams{decoder: map[int64]*aiapi.StreamDecoder{}}
 
 // AIStreamOpen starts a decoder for one protocol and returns its handle.
-func AIStreamOpen(protocol string) (_ int64, err error) {
+func AIStreamOpen(name string) (_ int64, err error) {
 	defer guard(&err)
-	decoder, err := aiapi.NewStreamDecoder(aiapi.Protocol(protocol))
+	decoder, err := aiapi.NewStreamDecoder(aiapi.Protocol(name))
 	if err != nil {
 		return 0, err
 	}
