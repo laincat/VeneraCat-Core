@@ -5,6 +5,14 @@ English | [简体中文](STATUS.md)
 
 
 
+
+## The register ceiling now explains itself (2026-11-05)
+
+The `256 registers` limit used to surface only as the engine's own words (`function needs more than 256 registers is not supported yet`), so a generated bundle that hit it looked like an inexplicable syntax error. `LoadSource` now keeps that error and appends something actionable:
+
+> `(a single function in this source is larger than the engine supports; split it into smaller functions)`
+
+Regression `TestCompatibilityRegisterCeilingExplainsItself`: 300 locals inside `loadInfo` must fail `LoadSource` with that hint. The ceiling itself is still recorded by `TestCompatibilityRegisterCeiling` (200 compiles, 300 fails).
 ## A service can say what it offers, from mobile (2026-11-05)
 
 `Supervisor.Describe` already existed but had no mobile entry, so the iOS service screen could only guess at `ping`. `mobile.ServiceDescribe(client, dataDir, id, granted)` reuses the same resident runtime (no second compile) and returns `[{"name","title"}]`; a service without a `describe` export answers `[]`, which is not an error.

@@ -185,3 +185,32 @@ func TestCompatibilityIntlIsPartial(t *testing.T) {
 		t.Fatalf("Collator: %s %v", out, err)
 	}
 }
+
+// A source whose single function is too large is told why, in words a source
+// author can act on, rather than only the engine's internal wording.
+func TestCompatibilityRegisterCeilingExplainsItself(t *testing.T) {
+	r, err := New(Options{}, Services{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	var b strings.Builder
+	b.WriteString(`class Big extends ComicSource {
+ name = "Big"; key = "big"; version = "1.0.0"
+`)
+	b.WriteString(" loadInfo = async (id) => {\n")
+	for i := 0; i < 300; i++ {
+		fmt.Fprintf(&b, "   let v%d = %d;\n", i, i)
+	}
+	b.WriteString("   return null }\n}\n")
+	_, err = r.LoadSource(context.Background(), b.String())
+	if err == nil {
+		t.Fatal("a source past the register ceiling loaded")
+	}
+	if !strings.Contains(err.Error(), "split it into smaller functions") {
+		t.Fatalf("error = %v", err)
+	}
+	if !strings.Contains(err.Error(), "key") && !strings.Contains(err.Error(), "evaluate") {
+		t.Fatalf("error lost its context: %v", err)
+	}
+}

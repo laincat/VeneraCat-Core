@@ -5,6 +5,14 @@
 
 
 
+
+## 寄存器上限现在会说人话（2026-11-05）
+
+`about:256 registers` 这条上限之前只以引擎原话出现（`function needs more than 256 registers is not supported yet`），一个生成的 bundle 撞上它时，源作者看到的是莫名其妙的语法错误。`LoadSource` 现在在保留原错误的前提下补一句可操作的话：
+
+> `(a single function in this source is larger than the engine supports; split it into smaller functions)`
+
+回归 `TestCompatibilityRegisterCeilingExplainsItself`：300 个局部变量写进 `loadInfo`，`LoadSource` 必须失败且带这句提示。上限本身仍由 `TestCompatibilityRegisterCeiling` 记录（200 可编译、300 失败）。
 ## 服务可以说明自己能做什么（移动端，2026-11-05）
 
 `Supervisor.Describe` 早就有，但移动端没有出口，iOS 的服务页只能盲按 `ping`。新增 `mobile.ServiceDescribe(client, dataDir, id, granted)`：走同一个 resident runtime（不重复编译），返回 `[{"name","title"}]`；没有 `describe` 导出的服务返回 `[]`，这不是错误。

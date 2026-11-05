@@ -100,6 +100,20 @@ func classOf(source string) (string, Kind, error) {
 // Only after the key is validated is that engine bound to the key; init()
 // then runs with the source's own storage. Comic and video keys share one
 // namespace, so a key identifies one plugin.
+// explainEval turns the engine's register-ceiling failure into something a
+// source author can act on.
+//
+// The ceiling is the pinned engine's and is recorded in
+// compatibility_limits_test.go: one function holding more than 256 registers
+// does not compile, which for a generated bundle reads like a mysterious
+// syntax error until it is named.
+func explainEval(err error) error {
+	if err == nil || !strings.Contains(err.Error(), "more than 256 registers") {
+		return err
+	}
+	return fmt.Errorf("%w (a single function in this source is larger than the engine supports; split it into smaller functions)", err)
+}
+
 func (r *Runtime) LoadSource(ctx context.Context, source string) (Meta, error) {
 	r.loadMu.Lock()
 	defer r.loadMu.Unlock()
@@ -133,7 +147,7 @@ func (r *Runtime) LoadSource(ctx context.Context, source string) (Meta, error) {
 		"author:s.author===undefined?null:s.author,homepage:s.homepage===undefined?null:s.homepage};})(globalThis.__vcPending)"
 	raw, err := evalOn(ctx, e, wrapped)
 	if err != nil {
-		return Meta{}, fmt.Errorf("js: source failed to evaluate: %w", err)
+		return Meta{}, fmt.Errorf("js: source failed to evaluate: %w", explainEval(err))
 	}
 	var m struct {
 		Name, Key, Version, MinAppVersion, URL any
