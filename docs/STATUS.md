@@ -3,6 +3,19 @@
 [English](STATUS.en.md) | 简体中文
 
 
+
+## 服务的 fetch 请求补上 `cookies` 字段（2026-11-05）
+
+Mac 在模拟器上跑「服务的 fetch 走 App 传输」时失败：界面报 `service: fixture-fetch failed on "ping": Error: 未能读取数据，因为数据丢失。`，**夹具侧 0 条请求**——请求根本没发出。
+
+根因：`mobile/service_run.go` 拼给客户端的请求 JSON 只有 `id/method/url/headers/partition`，缺了 `Host.HTTP` 契约里列出的 `cookies`；Nekularity 的 `WireRequest.cookies` 是非可选 `Bool`，`JSONDecoder` 在发请求之前就抛 `keyNotFound`。
+
+两侧都改：
+
+- Core：请求固定带 `"cookies": false`（这条请求本来也不带 Cookie），与契约一致
+- 客户端：`WireRequest.cookies` 改为 `Bool?`，缺省按 `false` 处理——一个省略的字段不该让整个请求在拨号前失败
+
+回归：`TestAServiceFetchGoesThroughTheClient` 新增断言（`cookies` 必须存在且为 `false`，以及契约里其余字段齐备）。负控把该字段删掉后用例失败，原文 `cookies = <nil> (present=false), want false`。
 ## 记录 moejs 的两条实测上限（2026-11-05）
 
 回答"能不能覆盖全部"时不能只引用上游的说法，所以把两条最可能挡住真实源的上限钉进 `comic/js/compatibility_limits_test.go`：

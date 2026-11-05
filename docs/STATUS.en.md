@@ -3,6 +3,19 @@
 English | [简体中文](STATUS.md)
 
 
+
+## A service's fetch request now carries `cookies` (2026-11-05)
+
+On a simulator the Mac failed "the service's fetch goes through the app": the screen said `service: fixture-fetch failed on "ping": Error: 未能读取数据，因为数据丢失。` while **the fixture recorded zero requests**, so nothing was ever sent.
+
+The cause was the request JSON `mobile/service_run.go` builds: it had `id/method/url/headers/partition` but not `cookies`, which the `Host.HTTP` contract lists. Nekularity's `WireRequest.cookies` was a non-optional `Bool`, so `JSONDecoder` threw `keyNotFound` before dialling.
+
+Both sides changed:
+
+- Core always sends `"cookies": false` (this request carries none anyway), matching the contract
+- the client takes `WireRequest.cookies` as `Bool?` and treats a missing value as `false` - an omitted field must not fail a whole request before it is made
+
+Regression: `TestAServiceFetchGoesThroughTheClient` now asserts `cookies` is present and false along with the rest of the contract's fields. Removing the field makes it fail with `cookies = <nil> (present=false), want false`.
 ## Two measured moejs limits recorded (2026-11-05)
 
 Answering "does it cover everything" by quoting upstream is not enough, so the two limits most likely to block a real source are pinned in `comic/js/compatibility_limits_test.go`:

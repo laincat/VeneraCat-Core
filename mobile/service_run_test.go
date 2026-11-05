@@ -106,6 +106,16 @@ export function handle(method, payload) {
 	if part, _ := host.requests[0]["partition"].(string); part != "service:fixture" {
 		t.Fatalf("partition = %q", part)
 	}
+	// Every field the host contract lists is present, so a client that decodes
+	// the documented shape cannot fail on a missing key before dialling.
+	if cookies, ok := host.requests[0]["cookies"]; !ok || cookies != false {
+		t.Fatalf("cookies = %v (present=%v), want false", cookies, ok)
+	}
+	for _, field := range []string{"id", "method", "url", "headers", "bodyBase64"} {
+		if _, ok := host.requests[0][field]; !ok && field != "bodyBase64" {
+			t.Fatalf("request has no %q: %v", field, host.requests[0])
+		}
+	}
 }
 
 // Without the network permission in force the service cannot reach the client

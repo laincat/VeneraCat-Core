@@ -157,10 +157,14 @@ func parsePermissions(granted string) ([]service.Permission, error) {
 func fetchThroughClient(ctx context.Context, client Host, id, rawURL string) (string, error) {
 	n := serviceRequestSeq.Add(1)
 	req := map[string]any{
-		"id":        n,
-		"method":    "GET",
-		"url":       rawURL,
-		"headers":   map[string][]string{},
+		"id":      n,
+		"method":  "GET",
+		"url":     rawURL,
+		"headers": map[string][]string{},
+		// The host contract lists cookies, so the field is sent even when this
+		// request carries none: a client that decodes the documented shape must
+		// not fail on a missing key before it even dials.
+		"cookies":   false,
 		"partition": "service:" + id,
 	}
 	body, err := json.Marshal(req)
