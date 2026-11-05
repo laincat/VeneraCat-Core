@@ -24,6 +24,8 @@ iOS 的标准接口仍显示「整包返回 · 流式尚未接通」。原因是
 
 这样客户端自己发起连接、自己取消，解析仍只有一份（与 `SendAIRequestStream`、桌面共用同一个解码器）。
 
+句柄以**字符串**返回：gomobile 把 `(int64, error)` 映射成 Swift 的 out 参数，而 `(string, error)` 是与本仓其它入口一致的 NSError 指针形式——第一次按 int64 写，客户端 CI 报 `missing argument for parameter #3` / `cannot convert UnsafeMutablePointer<NSError?>`，改成字符串后才通。
+
 回归 `TestAStreamDecoderTakesSplitPieces`：把 SSE body **每 3 字节一片**喂进去（大部分事件跨片），必须正好收到 `Hel` + `lo`，且最终 `Done() == true`；`TestAPushWithoutAHandleIsRefused` 钉住未知句柄与未知协议都报错。
 ## 「Intl 残缺」不等于日期不可用（2026-11-05）
 

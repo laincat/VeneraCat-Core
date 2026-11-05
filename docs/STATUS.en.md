@@ -24,6 +24,8 @@ iOS still says 「整包返回 · 流式尚未接通」 on the standard-protocol
 
 The client opens and cancels its own connection while the parsing stays in one place, shared with `SendAIRequestStream` and the desktop.
 
+Handles come back as **text**: gomobile maps `(int64, error)` to a Swift out-parameter, while `(string, error)` is the NSError-pointer form every other entry in this repository uses. The first attempt used int64 and the client CI reported `missing argument for parameter #3` / `cannot convert UnsafeMutablePointer<NSError?>`; the string form compiled.
+
 `TestAStreamDecoderTakesSplitPieces` feeds an SSE body **three bytes at a time** (most events span pieces) and must receive exactly `Hel` + `lo` with `Done() == true` at the end; `TestAPushWithoutAHandleIsRefused` pins that an unknown handle and an unknown protocol both fail.
 ## "Intl is partial" does not mean dates are broken (2026-11-05)
 

@@ -37,18 +37,21 @@ func TestAStreamDecoderTakesSplitPieces(t *testing.T) {
 		t.Fatalf("deltas = %q", collected.String())
 	}
 	done, err := AIStreamDone(handle)
-	if err != nil || !done {
-		t.Fatalf("done = %v, %v", done, err)
+	if err != nil || done != "true" {
+		t.Fatalf("done = %q, %v", done, err)
 	}
 }
 
 // An unknown handle is a caller mistake, not something to ignore.
 func TestAPushWithoutAHandleIsRefused(t *testing.T) {
-	if _, err := AIStreamPush(999, base64.StdEncoding.EncodeToString([]byte("data: {}\n\n"))); err == nil {
+	if _, err := AIStreamPush("999", base64.StdEncoding.EncodeToString([]byte("data: {}\n\n"))); err == nil {
 		t.Fatal("a push with no decoder was accepted")
 	}
 	if _, err := AIStreamOpen("no-such-protocol"); err == nil {
 		t.Fatal("an unknown protocol opened a decoder")
+	}
+	if _, err := AIStreamPush("not-a-handle", "AAAA"); err == nil {
+		t.Fatal("a non-numeric handle was accepted")
 	}
 }
 
