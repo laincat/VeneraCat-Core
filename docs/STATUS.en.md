@@ -8,6 +8,23 @@ English | [简体中文](STATUS.md)
 
 
 
+
+## The streaming decoder can be fed pieces (2026-11-05)
+
+iOS still says 「整包返回 · 流式尚未接通」 on the standard-protocol screen. The two sides have different gaps: the client owns the transport (cookies, cancellation and certificates are its business), but **the protocol's SSE parsing lives in Core's `aiapi`** with no mobile entry.
+
+`mobile/aistream.go` adds:
+
+| Entry | Purpose |
+| --- | --- |
+| `AIStreamOpen(protocol)` | opens a decoder for one protocol, returns a handle |
+| `AIStreamPush(handle, chunkBase64)` | feeds one body piece, returns the deltas it completed (JSON array) |
+| `AIStreamDone(handle)` | whether the answer declared itself complete |
+| `AIStreamClose(handle)` | forgets a handle so the registry cannot grow |
+
+The client opens and cancels its own connection while the parsing stays in one place, shared with `SendAIRequestStream` and the desktop.
+
+`TestAStreamDecoderTakesSplitPieces` feeds an SSE body **three bytes at a time** (most events span pieces) and must receive exactly `Hel` + `lo` with `Done() == true` at the end; `TestAPushWithoutAHandleIsRefused` pins that an unknown handle and an unknown protocol both fail.
 ## "Intl is partial" does not mean dates are broken (2026-11-05)
 
 The earlier entry recorded the Intl gaps as "no Collator, no Temporal". So that it is not misread as "date formatting is broken", here is a measurement and a regression:

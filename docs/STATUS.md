@@ -8,6 +8,23 @@
 
 
 
+
+## 流式答复的解码器可以按片喂（2026-11-05）
+
+iOS 的标准接口仍显示「整包返回 · 流式尚未接通」。原因是两端的缺口不同：客户端有自己的传输（Cookie、取消、证书都在它手里），但**协议的 SSE 解析在 Core 的 `aiapi` 里**，没有移动出口。
+
+新增 `mobile/aistream.go`：
+
+| 入口 | 作用 |
+| --- | --- |
+| `AIStreamOpen(protocol)` | 按协议开一个解码器，返回句柄 |
+| `AIStreamPush(handle, chunkBase64)` | 喂一片 body，返回这片完成的增量（JSON 数组） |
+| `AIStreamDone(handle)` | 回答是否已声明完成 |
+| `AIStreamClose(handle)` | 忘掉句柄，避免注册表堆积 |
+
+这样客户端自己发起连接、自己取消，解析仍只有一份（与 `SendAIRequestStream`、桌面共用同一个解码器）。
+
+回归 `TestAStreamDecoderTakesSplitPieces`：把 SSE body **每 3 字节一片**喂进去（大部分事件跨片），必须正好收到 `Hel` + `lo`，且最终 `Done() == true`；`TestAPushWithoutAHandleIsRefused` 钉住未知句柄与未知协议都报错。
 ## 「Intl 残缺」不等于日期不可用（2026-11-05）
 
 上一条把 Intl 的缺口写成「Collator 没有、Temporal 没有」。为了不让它被误读成「日期格式化坏了」，补一条实测与回归：
