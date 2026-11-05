@@ -2,11 +2,14 @@ package mobile
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,12 +36,15 @@ type serviceRunner struct {
 
 var serviceRunners = &serviceRunner{sup: map[string]*service.Supervisor{}}
 
-func (r *serviceRunner) supervisor(client Host, dataDir, granted string, dir string) (*service.Supervisor, error) {
+func (r *serviceRunner) supervisor(client Host, dataDir, granted string, dir string, secrets map[string]string) (*service.Supervisor, error) {
 	allowed, err := parsePermissions(granted)
 	if err != nil {
 		return nil, err
 	}
-	key := dataDir + "\x00" + granted
+	// Two calls with different account values must not share a runtime: the
+	// values are what the service reads, and a runtime carries no way to swap
+	// them. The key holds a digest rather than the values themselves.
+	key := dataDir + "\x00" + granted + "\x00" + secretsDigest(secrets)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if sup, ok := r.sup[key]; ok {
@@ -69,7 +75,10 @@ func (r *serviceRunner) supervisor(client Host, dataDir, granted string, dir str
 			// way to read them and says so rather than pretending they are
 			// empty.
 			Secret: func(_ context.Context, k string) (string, error) {
-				return "", fmt.Errorf("service: %q reads secrets, which the client owns; %q is not available to Core", id, k)
+				if v, ok := secrets[k]; ok {
+					return v, nil
+				}
+				return "", fmt.Errorf("service: %q asked for the account value %q, which this call did not supply", id, k)
 			},
 			Log: func(string, string) {},
 		}
@@ -89,7 +98,19 @@ func (r *serviceRunner) supervisor(client Host, dataDir, granted string, dir str
 // not get more, and one that asked for more does not get what was withheld.
 //
 // payload is the request's JSON text; the result is the service's JSON text.
-func ServiceCall(client Host, dataDir, id, method, payload, granted string) (_ string, err error) {
+func ServiceCall(client Host, dataDir, id, method, payload, granted string) (string, error) {
+	return ServiceCallWithSecrets(client, dataDir, id, method, payload, granted, "")
+}
+
+// ServiceCallWithSecrets is ServiceCall with the account values this call may
+// read.
+//
+// A phone keeps its account values in its own keychain, so Core cannot look
+// them up; the client hands over the ones the person entered for this service
+// and nothing else. secretsJSON is `{"key":"value"}` and is only reachable
+// through the `secrets` permission: without it the service is refused before
+// it reads anything.
+func ServiceCallWithSecrets(client Host, dataDir, id, method, payload, granted, secretsJSON string) (_ string, err error) {
 	defer guard(&err)
 	if client == nil {
 		return "", fmt.Errorf("mobile: ServiceCall needs a host for its network")
@@ -97,7 +118,11 @@ func ServiceCall(client Host, dataDir, id, method, payload, granted string) (_ s
 	if strings.TrimSpace(id) == "" {
 		return "", fmt.Errorf("mobile: ServiceCall needs a service id")
 	}
-	sup, err := serviceRunners.supervisor(client, dataDir, granted, filepath.Join(dataDir, "services"))
+	secrets, err := parseSecrets(secretsJSON)
+	if err != nil {
+		return "", err
+	}
+	sup, err := serviceRunners.supervisor(client, dataDir, granted, filepath.Join(dataDir, "services"), secrets)
 	if err != nil {
 		return "", err
 	}
@@ -117,6 +142,38 @@ func ServiceCall(client Host, dataDir, id, method, payload, granted string) (_ s
 	return string(out), nil
 }
 
+// parseSecrets reads the account values a client supplies for one call.
+func parseSecrets(raw string) (map[string]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var out map[string]string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("mobile: the account values are not a JSON object of strings: %v", err)
+	}
+	return out, nil
+}
+
+// secretsDigest is what a supervisor key holds instead of the values.
+func secretsDigest(secrets map[string]string) string {
+	if len(secrets) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(secrets))
+	for k := range secrets {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	for _, k := range keys {
+		h.Write([]byte(k))
+		h.Write([]byte{0})
+		h.Write([]byte(secrets[k]))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // ServiceDescribe returns what an installed service offers to press, as JSON
 // like [{"name":"sync","title":"同步"}].
 //
@@ -128,7 +185,7 @@ func ServiceDescribe(client Host, dataDir, id, granted string) (_ string, err er
 	if client == nil {
 		return "", fmt.Errorf("mobile: ServiceDescribe needs a host for its network")
 	}
-	sup, err := serviceRunners.supervisor(client, dataDir, granted, filepath.Join(dataDir, "services"))
+	sup, err := serviceRunners.supervisor(client, dataDir, granted, filepath.Join(dataDir, "services"), nil)
 	if err != nil {
 		return "", err
 	}

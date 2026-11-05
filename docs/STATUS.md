@@ -6,6 +6,17 @@
 
 
 
+
+## 服务的账号值由调用方交给 Core（2026-11-05）
+
+之前服务在 iOS 上读 `secret()` 只会被拒绝——Core 说「账号值在客户端手里」，但也没有传进来的路。新增 `mobile.ServiceCallWithSecrets(client, dataDir, id, method, payload, granted, secretsJSON)`：
+
+- `secretsJSON` 是 `{"key":"value"}`，只在 `secrets` 权限生效时可达；没授予时仍然在读之前就拒绝
+- 调用没提供的键会**指名**报错（`asked for the account value "token", which this call did not supply`），不再假装是空串
+- 不同账号值的调用**不共用 runtime**：supervisor 键里放的是这些值的摘要，否则第二次调用会拿到上一次的凭据——这条是被测试抓出来的真实缺陷
+- `ServiceCall` 保持原签名，等价于不传账号值
+
+回归：`TestAccountValuesComeFromTheCall`（传入即读到、缺键被指名）、`TestAccountValuesNeedThePermission`（未授权时即使传了也读不到）、`TestBrokenAccountValuesAreRefused`。
 ## 寄存器上限现在会说人话（2026-11-05）
 
 `about:256 registers` 这条上限之前只以引擎原话出现（`function needs more than 256 registers is not supported yet`），一个生成的 bundle 撞上它时，源作者看到的是莫名其妙的语法错误。`LoadSource` 现在在保留原错误的前提下补一句可操作的话：

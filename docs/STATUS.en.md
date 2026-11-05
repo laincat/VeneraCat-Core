@@ -6,6 +6,17 @@ English | [简体中文](STATUS.md)
 
 
 
+
+## A service's account values are handed to Core by the caller (2026-11-05)
+
+A service reading `secret()` on iOS used to be refused outright: Core said the values live with the client, and there was no way to pass them in. `mobile.ServiceCallWithSecrets(client, dataDir, id, method, payload, granted, secretsJSON)` adds one:
+
+- `secretsJSON` is `{"key":"value"}` and is only reachable while the `secrets` permission is in force; without it the service is refused before it reads anything
+- a key the call did not supply is named in the error (`asked for the account value "token", which this call did not supply`) rather than pretending to be empty
+- calls with different account values **do not share a runtime**: the supervisor key holds a digest of those values, because otherwise the second call would be served the first one's credentials - a real defect the test caught
+- `ServiceCall` keeps its signature and means "no account values"
+
+Regressions: `TestAccountValuesComeFromTheCall` (supplied values are read, a missing key is named), `TestAccountValuesNeedThePermission` (supplied but ungranted is still refused), and `TestBrokenAccountValuesAreRefused`.
 ## The register ceiling now explains itself (2026-11-05)
 
 The `256 registers` limit used to surface only as the engine's own words (`function needs more than 256 registers is not supported yet`), so a generated bundle that hit it looked like an inexplicable syntax error. `LoadSource` now keeps that error and appends something actionable:

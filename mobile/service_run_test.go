@@ -162,18 +162,45 @@ export function handle(method) {
 	}
 }
 
-// A service that asks for secrets is refused by name, because a phone keeps
-// account values where Core cannot read them.
-func TestSecretsAreRefusedByName(t *testing.T) {
+// Account values reach a service only when the client hands them over for that
+// call, and a value it did not supply is refused by name.
+func TestAccountValuesComeFromTheCall(t *testing.T) {
 	data := t.TempDir()
 	installFixture(t, data, `{"id":"fixture","name":"Fixture","version":"1.0.0","kind":"service.js","entry":"index.mjs","permissions":["secrets"]}`, `
 export function handle() { return { token: secret('token') } }`)
-	_, err := ServiceCall(newServiceHost(), data, "fixture", "go", `null`, "secrets")
-	if err == nil {
-		t.Fatal("a service read a secret")
+	out, err := ServiceCallWithSecrets(newServiceHost(), data, "fixture", "go",
+		`null`, "secrets", `{"token":"s3cret"}`)
+	if err != nil {
+		t.Fatalf("call: %v", err)
 	}
-	if !strings.Contains(err.Error(), "client owns") {
+	if !strings.Contains(out, "s3cret") {
+		t.Fatalf("result = %s", out)
+	}
+
+	_, err = ServiceCallWithSecrets(newServiceHost(), data, "fixture", "go",
+		`null`, "secrets", `{"other":"x"}`)
+	if err == nil || !strings.Contains(err.Error(), `"token"`) {
+		t.Fatalf("a missing value must be named: %v", err)
+	}
+}
+
+// Without the secrets permission the values are not reachable at all, even when
+// the client supplied them.
+func TestAccountValuesNeedThePermission(t *testing.T) {
+	data := t.TempDir()
+	installFixture(t, data, `{"id":"fixture","name":"Fixture","version":"1.0.0","kind":"service.js","entry":"index.mjs","permissions":["secrets"]}`, `
+export function handle() { return { token: secret('token') } }`)
+	_, err := ServiceCallWithSecrets(newServiceHost(), data, "fixture", "go",
+		`null`, "", `{"token":"s3cret"}`)
+	if err == nil || !strings.Contains(err.Error(), "secrets") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+// Malformed account values never reach a service.
+func TestBrokenAccountValuesAreRefused(t *testing.T) {
+	if _, err := parseSecrets(`{"token":`); err == nil {
+		t.Fatal("broken account values were accepted")
 	}
 }
 
