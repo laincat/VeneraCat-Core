@@ -117,6 +117,31 @@ func ServiceCall(client Host, dataDir, id, method, payload, granted string) (_ s
 	return string(out), nil
 }
 
+// ServiceDescribe returns what an installed service offers to press, as JSON
+// like [{"name":"sync","title":"同步"}].
+//
+// A service without a describe export answers with an empty list: it is used by
+// other code rather than by a button, which is not an error. The same host is
+// used as a call would, because describing compiles the package too.
+func ServiceDescribe(client Host, dataDir, id, granted string) (_ string, err error) {
+	defer guard(&err)
+	if client == nil {
+		return "", fmt.Errorf("mobile: ServiceDescribe needs a host for its network")
+	}
+	sup, err := serviceRunners.supervisor(client, dataDir, granted, filepath.Join(dataDir, "services"))
+	if err != nil {
+		return "", err
+	}
+	methods, err := sup.Describe(context.Background(), id)
+	if err != nil {
+		return "", err
+	}
+	if methods == nil {
+		return "[]", nil
+	}
+	return encode(methods)
+}
+
 // ServiceRunForget drops the supervisors for one directory: a client calls it
 // when it removes a package or leaves an environment, so the next call loads
 // the code from disk again.

@@ -4,6 +4,12 @@ English | [简体中文](STATUS.md)
 
 
 
+
+## A service can say what it offers, from mobile (2026-11-05)
+
+`Supervisor.Describe` already existed but had no mobile entry, so the iOS service screen could only guess at `ping`. `mobile.ServiceDescribe(client, dataDir, id, granted)` reuses the same resident runtime (no second compile) and returns `[{"name","title"}]`; a service without a `describe` export answers `[]`, which is not an error.
+
+Two regressions: a package with `describe` yields `sync` / `同步`, and one without yields `[]`.
 ## A service's fetch request now carries `cookies` (2026-11-05)
 
 On a simulator the Mac failed "the service's fetch goes through the app": the screen said `service: fixture-fetch failed on "ping": Error: 未能读取数据，因为数据丢失。` while **the fixture recorded zero requests**, so nothing was ever sent.

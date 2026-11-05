@@ -192,3 +192,32 @@ func TestANonJSONPayloadIsRefused(t *testing.T) {
 		t.Fatal("a broken payload was sent")
 	}
 }
+
+// Describing a service names what a screen can offer, and a service without a
+// describe export answers with an empty list rather than an error.
+func TestDescribeListsWhatAServiceOffers(t *testing.T) {
+	data := t.TempDir()
+	installFixture(t, data, `{"id":"fixture","name":"Fixture","version":"1.0.0","kind":"service.js","entry":"index.mjs","permissions":[]}`, `
+export function describe() { return { methods: [{ name: 'sync', title: '同步' }] } }
+export function handle() { return { ok: true } }`)
+	out, err := ServiceDescribe(&serviceHost{fakeHost: &fakeHost{}}, data, "fixture", "")
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	if !strings.Contains(out, `"sync"`) || !strings.Contains(out, `同步`) {
+		t.Fatalf("methods = %s", out)
+	}
+}
+
+func TestDescribeWithoutTheExportIsAnEmptyList(t *testing.T) {
+	data := t.TempDir()
+	installFixture(t, data, `{"id":"fixture","name":"Fixture","version":"1.0.0","kind":"service.js","entry":"index.mjs","permissions":[]}`, `
+export function handle() { return { ok: true } }`)
+	out, err := ServiceDescribe(&serviceHost{fakeHost: &fakeHost{}}, data, "fixture", "")
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	if out != "[]" {
+		t.Fatalf("methods = %s", out)
+	}
+}

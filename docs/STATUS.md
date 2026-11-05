@@ -4,6 +4,12 @@
 
 
 
+
+## 服务可以说明自己能做什么（移动端，2026-11-05）
+
+`Supervisor.Describe` 早就有，但移动端没有出口，iOS 的服务页只能盲按 `ping`。新增 `mobile.ServiceDescribe(client, dataDir, id, granted)`：走同一个 resident runtime（不重复编译），返回 `[{"name","title"}]`；没有 `describe` 导出的服务返回 `[]`，这不是错误。
+
+回归两条：带 `describe` 的包拿到 `sync` / `同步`；没有导出的包拿到 `[]`。
 ## 服务的 fetch 请求补上 `cookies` 字段（2026-11-05）
 
 Mac 在模拟器上跑「服务的 fetch 走 App 传输」时失败：界面报 `service: fixture-fetch failed on "ping": Error: 未能读取数据，因为数据丢失。`，**夹具侧 0 条请求**——请求根本没发出。
