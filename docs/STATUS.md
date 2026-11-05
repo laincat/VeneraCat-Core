@@ -17,6 +17,8 @@
 
 回归（`mobile/service_run_test.go`，6 条）：服务 fetch 经客户端且分区为 `service:fixture`；未授权时**一次请求都不发**并指名 network；存储跨调用存活；secrets 被指名拒绝；未知权限与非法 JSON 被拒。负控把 granted 置空后正例失败，原文 `service: fixture may not use the network: this host did not grant the "network" permission`。
 
+CI `42025069444`（Ubuntu/Windows/macOS 26 Go + Apple xcframework 与 Swift smoke）四作业全过；提交 `69df227`。两端 pin 保持 `0f1e7b8`：这一提交只新增移动入口，等客户端真正调用时再跟。
+
 
 ## 服务的网络走受控传输桥（2026-11-04）
 

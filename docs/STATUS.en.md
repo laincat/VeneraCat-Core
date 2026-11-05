@@ -17,6 +17,8 @@ The mobile surface had no way to run a service: `mobile/service.go` stopped at i
 
 Regressions (`mobile/service_run_test.go`, six cases): a service's fetch goes through the client with partition `service:fixture`; without the grant **not one request is made** and the error names `network`; storage survives; secrets are refused by name; an unknown permission and a non-JSON payload are refused. The negative control emptied `granted` and the positive case failed with `service: fixture may not use the network: this host did not grant the "network" permission`.
 
+CI `42025069444` passed all four jobs (Ubuntu/Windows/macOS 26 Go, plus the Apple xcframework and Swift smoke test) at `69df227`. Both clients keep the `0f1e7b8` pin: this commit only adds a mobile entry, and the pin moves when a client actually calls it.
+
 
 ## A service reaches the network through a controlled bridge (2026-11-04)
 
