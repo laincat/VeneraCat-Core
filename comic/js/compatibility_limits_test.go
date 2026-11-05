@@ -214,3 +214,35 @@ func TestCompatibilityRegisterCeilingExplainsItself(t *testing.T) {
 		t.Fatalf("error lost its context: %v", err)
 	}
 }
+
+// Dates a source formats for display work, including the time zone option.
+//
+// Two of the official sources call `toLocaleDateString`, so "Intl is partial"
+// must not be read as "dates are broken": what is missing is Collator and
+// Temporal, not DateTimeFormat.
+func TestCompatibilityLocaleDatesWork(t *testing.T) {
+	r, err := New(Options{}, Services{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+	utc, err := r.Eval(ctx, `new Date(1700000000000).toLocaleString('en-US', {timeZone:'UTC'})`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokyo, err := r.Eval(ctx, `new Date(1700000000000).toLocaleString('en-US', {timeZone:'Asia/Tokyo'})`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(utc) == string(tokyo) {
+		t.Fatalf("the time zone option was ignored: both said %s", utc)
+	}
+	if !strings.Contains(string(utc), "11/14/2023") || !strings.Contains(string(tokyo), "11/15/2023") {
+		t.Fatalf("utc=%s tokyo=%s", utc, tokyo)
+	}
+	day, err := r.Eval(ctx, `new Date(1700000000000).toLocaleDateString('zh-CN')`)
+	if err != nil || strings.Trim(string(day), `"`) == "" {
+		t.Fatalf("toLocaleDateString: %s %v", day, err)
+	}
+}

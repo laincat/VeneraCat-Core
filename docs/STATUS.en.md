@@ -7,6 +7,16 @@ English | [简体中文](STATUS.md)
 
 
 
+
+## "Intl is partial" does not mean dates are broken (2026-11-05)
+
+The earlier entry recorded the Intl gaps as "no Collator, no Temporal". So that it is not misread as "date formatting is broken", here is a measurement and a regression:
+
+- `new Date(...).toLocaleString('en-US', {timeZone:'UTC'})` gives `11/14/2023, 10:13:20 PM`
+- the same instant with `{timeZone:'Asia/Tokyo'}` gives `11/15/2023, 7:13:20 AM` (the **time zone option is honoured**, not ignored)
+- `toLocaleDateString('zh-CN')` returns a date normally
+
+Two of the 32 official sources (`jm.js` and `manwaba.js`) call `toLocaleDateString`, and neither falls into the gap. `TestCompatibilityLocaleDatesWork` pins all three points so "no Collator" cannot become "dates do not work".
 ## A service's account values are handed to Core by the caller (2026-11-05)
 
 A service reading `secret()` on iOS used to be refused outright: Core said the values live with the client, and there was no way to pass them in. `mobile.ServiceCallWithSecrets(client, dataDir, id, method, payload, granted, secretsJSON)` adds one:

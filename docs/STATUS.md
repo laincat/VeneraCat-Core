@@ -7,6 +7,16 @@
 
 
 
+
+## 「Intl 残缺」不等于日期不可用（2026-11-05）
+
+上一条把 Intl 的缺口写成「Collator 没有、Temporal 没有」。为了不让它被误读成「日期格式化坏了」，补一条实测与回归：
+
+- `new Date(...).toLocaleString('en-US', {timeZone:'UTC'})` → `11/14/2023, 10:13:20 PM`
+- 同一时刻 `{timeZone:'Asia/Tokyo'}` → `11/15/2023, 7:13:20 AM`（**时区选项生效**，不是摆设）
+- `toLocaleDateString('zh-CN')` 正常返回
+
+32 个官方源里 `jm.js` 与 `manwaba.js` 都调用 `toLocaleDateString`，它们不落在缺口里。回归 `TestCompatibilityLocaleDatesWork` 钉住这三点，避免下次把「缺 Collator」说成「日期不可用」。
 ## 服务的账号值由调用方交给 Core（2026-11-05）
 
 之前服务在 iOS 上读 `secret()` 只会被拒绝——Core 说「账号值在客户端手里」，但也没有传进来的路。新增 `mobile.ServiceCallWithSecrets(client, dataDir, id, method, payload, granted, secretsJSON)`：
