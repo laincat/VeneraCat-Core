@@ -2,6 +2,7 @@ package js
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -132,5 +133,55 @@ func TestCompatibilityTextDecoderIsUTF8Only(t *testing.T) {
 				t.Fatalf("got %s, want %s, err %v", got, tc.want, err)
 			}
 		})
+	}
+}
+
+// A function with more than 256 registers does not compile.
+//
+// The ceiling is measured, not assumed: a source with one very long function
+// (a generated bundle, or a `handle` that never splits) fails to load with a
+// SyntaxError rather than running slowly. Recording it here means an engine
+// bump that moves the limit, in either direction, shows up as a test change
+// instead of a surprise on a user's screen.
+func TestCompatibilityRegisterCeiling(t *testing.T) {
+	r, err := New(Options{}, Services{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+	build := func(n int) string {
+		var b strings.Builder
+		b.WriteString("(function(){")
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&b, "let v%d = %d;", i, i)
+		}
+		b.WriteString("return 0})()")
+		return b.String()
+	}
+	if _, err := r.Eval(ctx, build(200)); err != nil {
+		t.Fatalf("200 locals should compile: %v", err)
+	}
+	_, err = r.Eval(ctx, build(300))
+	if err == nil || !strings.Contains(err.Error(), "more than 256 registers") {
+		t.Fatalf("300 locals: %v", err)
+	}
+}
+
+// Intl is partial: DateTimeFormat exists, Collator does not. A source that
+// sorts with `Intl.Collator` gets a TypeError, so the client must not assume a
+// full Intl the way a browser has one.
+func TestCompatibilityIntlIsPartial(t *testing.T) {
+	r, err := New(Options{}, Services{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+	if out, err := r.Eval(ctx, `typeof Intl.DateTimeFormat`); err != nil || string(out) != `"function"` {
+		t.Fatalf("DateTimeFormat: %s %v", out, err)
+	}
+	if out, err := r.Eval(ctx, `typeof Intl.Collator`); err != nil || string(out) != `"undefined"` {
+		t.Fatalf("Collator: %s %v", out, err)
 	}
 }

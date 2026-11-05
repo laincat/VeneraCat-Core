@@ -2,6 +2,15 @@
 
 English | [简体中文](STATUS.md)
 
+
+## Two measured moejs limits recorded (2026-11-05)
+
+Answering "does it cover everything" by quoting upstream is not enough, so the two limits most likely to block a real source are pinned in `comic/js/compatibility_limits_test.go`:
+
+- **A 256-register ceiling per function**: 200 locals compile, 300 fail with `SyntaxError: function needs more than 256 registers is not supported yet`. A long function that is never split (a generated bundle, a `handle` written as one block) therefore fails to load rather than running slowly.
+- **Intl is partial**: `Intl.DateTimeFormat` is a function, `Intl.Collator` is `undefined`, and `Temporal` is absent. A source that sorts with `Intl.Collator` gets a TypeError.
+
+Neither is a guess: the tests run the engine version this repository pins, so an engine bump that moves a limit shows up as a test change. Two existing ones cover `TextDecoder` being UTF-8 only (`gbk` is a RangeError) and `atob` being read only.
 ## iOS can run a service for real now (mobile.ServiceCall, 2026-11-05)
 
 The mobile surface had no way to run a service: `mobile/service.go` stopped at install, list, remove, manifest and source, with a comment saying running needs the client's transport and account values, so whoever wires it owns the Host. The desktop is Go and uses `service.Supervisor` directly; iOS is Swift and only sees `mobile.*`, so a package could be installed and never run.

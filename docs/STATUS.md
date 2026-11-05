@@ -2,6 +2,15 @@
 
 [English](STATUS.en.md) | 简体中文
 
+
+## 记录 moejs 的两条实测上限（2026-11-05）
+
+回答"能不能覆盖全部"时不能只引用上游的说法，所以把两条最可能挡住真实源的上限钉进 `comic/js/compatibility_limits_test.go`：
+
+- **单函数寄存器上限 256**：一个函数里 200 个局部变量能编译，300 个直接 `SyntaxError: function needs more than 256 registers is not supported yet`。一个从不拆分的长函数（生成的 bundle、写成一整段的 `handle`）会因此加载失败，而不是跑得慢。
+- **Intl 只有一部分**：`Intl.DateTimeFormat` 是函数，`Intl.Collator` 是 `undefined`，`Temporal` 没有。用 `Intl.Collator` 排序的源会拿到 TypeError。
+
+这两条不是猜的：测试跑的就是本仓固定的引擎版本，引擎升级若改变上限（任一方向）会表现为测试变化。另有既存的 `TextDecoder` 只支持 UTF-8（`gbk` 报 RangeError）与 `atob` 只读两条。
 ## iOS 也能真正运行服务了（mobile.ServiceCall，2026-11-05）
 
 移动端一直没有「运行服务」的入口：`mobile/service.go` 只到安装、列表、移除、清单、源码，注释里写明运行需要客户端的传输与账号值，所以接它的客户端自己持有 Host。桌面是 Go，可直接用 `service.Supervisor`；iOS 是 Swift，只能看到 `mobile.*`，于是服务装得上却跑不起来。
