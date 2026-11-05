@@ -422,3 +422,27 @@ func TestHeaderAndDomainRules(t *testing.T) {
 		}
 	}
 }
+
+// A source may name the virtual host it wants (comic_walker.js sets
+// `Host: mobileapp.comic-walker.com`) while the address it dials is another
+// one. Core's job is to hand that header to the client untouched; dropping it
+// here would make a client fix useless, so this pins Core's half of the
+// contract. Whether the header survives the wire is the client's half, and the
+// clients have their own cases for it.
+func TestASourceSuppliedHostReachesTheClient(t *testing.T) {
+	ft := respond(200, []byte("{}"))
+	res := DoHTTP(context.Background(), ft, "s", HTTPMessage{
+		URL:     "https://203.0.113.9/v1/users",
+		Headers: map[string]any{"Host": "mobileapp.example.com"},
+	}, "")
+	if res.Error != nil {
+		t.Fatalf("result = %+v", res)
+	}
+	got := ft.last().Header.Get("Host")
+	if got != "mobileapp.example.com" {
+		t.Fatalf("the client was given Host %q, not the one the source named", got)
+	}
+	if ft.last().URL != "https://203.0.113.9/v1/users" {
+		t.Fatalf("the address changed to %q", ft.last().URL)
+	}
+}

@@ -21,6 +21,12 @@ type Request struct {
 	URL    string
 	// Header uses canonical keys. A missing User-Agent means the client
 	// supplies its default one.
+	//
+	// A "Host" entry names the virtual host to answer as, not the address to
+	// dial: a source may reach an API by IP or by a loader address while still
+	// being served by that name (comic_walker.js does this). A client must put
+	// it on the outgoing request (Go: http.Request.Host; URLSession: the Host
+	// header) instead of letting the address's own name be sent.
 	Header http.Header
 	Body   []byte
 	// Cookies asks the client to attach its stored cookies for URL.
