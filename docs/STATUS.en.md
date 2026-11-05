@@ -2,6 +2,22 @@
 
 English | [简体中文](STATUS.md)
 
+## iOS can run a service for real now (mobile.ServiceCall, 2026-11-05)
+
+The mobile surface had no way to run a service: `mobile/service.go` stopped at install, list, remove, manifest and source, with a comment saying running needs the client's transport and account values, so whoever wires it owns the Host. The desktop is Go and uses `service.Supervisor` directly; iOS is Swift and only sees `mobile.*`, so a package could be installed and never run.
+
+`mobile/service_run.go` adds:
+
+- `ServiceCall(client Host, dataDir, id, method, payload, granted)`: the client's own `Host` (the HTTP callbacks `CoreHost` already implements) is what the service's host is built from
+- a service's `fetch(url)` goes out through `Host.HTTP` (carrying the request id, so cancelling calls `Host.CancelHTTP`) and **never opens a socket of its own**
+- permissions are the intersection: `granted` is parsed into `service.Permission` values and only what the manifest also asks for is in force
+- storage lives at `<dataDir>/services/<id>/storage.json` and survives the call
+- account values are refused by name with the reason (a phone keeps them where Core cannot read them)
+- one `Supervisor` per data directory, with the desktop's LRU and idle rules; `ServiceRunForget` is for removing a package or leaving an environment
+
+Regressions (`mobile/service_run_test.go`, six cases): a service's fetch goes through the client with partition `service:fixture`; without the grant **not one request is made** and the error names `network`; storage survives; secrets are refused by name; an unknown permission and a non-JSON payload are refused. The negative control emptied `granted` and the positive case failed with `service: fixture may not use the network: this host did not grant the "network" permission`.
+
+
 ## A service reaches the network through a controlled bridge (2026-11-04)
 
 A service's `fetch` used to land straight on whatever function the host supplied, so the restriction only existed in the caller. Core now ships `service.Bridge`: only `http`/`https`, an optional host and subdomain policy, **every redirect hop re-checked by the same rules**, a 4 MiB response bound by default, and no cookies by default. `Bridge.Host()` puts it behind the runtime, so a service has no other way out.

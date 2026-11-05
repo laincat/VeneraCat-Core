@@ -2,6 +2,22 @@
 
 [English](STATUS.en.md) | 简体中文
 
+## iOS 也能真正运行服务了（mobile.ServiceCall，2026-11-05）
+
+移动端一直没有「运行服务」的入口：`mobile/service.go` 只到安装、列表、移除、清单、源码，注释里写明运行需要客户端的传输与账号值，所以接它的客户端自己持有 Host。桌面是 Go，可直接用 `service.Supervisor`；iOS 是 Swift，只能看到 `mobile.*`，于是服务装得上却跑不起来。
+
+新增 `mobile/service_run.go`：
+
+- `ServiceCall(client Host, dataDir, id, method, payload, granted)`：传入客户端自己的 `Host`（`CoreHost` 那套 HTTP 回调），Core 用它拼出服务的 host
+- 服务的 `fetch(url)` 走 `Host.HTTP`（带请求 id，取消时调 `Host.CancelHTTP`），**不另开 socket**
+- 权限是交集：`granted` 解析成 `service.Permission`，与清单申请的共同生效
+- 存储落在 `<dataDir>/services/<id>/storage.json`，跨调用保留
+- 账号值明确拒绝并说明原因（手机把它们存在 Core 读不到的地方）
+- 每个 dataDir 一个 `Supervisor`，LRU 与空闲回收同桌面；`ServiceRunForget` 供删包或换环境时用
+
+回归（`mobile/service_run_test.go`，6 条）：服务 fetch 经客户端且分区为 `service:fixture`；未授权时**一次请求都不发**并指名 network；存储跨调用存活；secrets 被指名拒绝；未知权限与非法 JSON 被拒。负控把 granted 置空后正例失败，原文 `service: fixture may not use the network: this host did not grant the "network" permission`。
+
+
 ## 服务的网络走受控传输桥（2026-11-04）
 
 服务里的 `fetch` 原先直接落到宿主提供的函数上，限制只存在于调用方。现在 Core 自带 `service.Bridge`：只允许 `http`/`https`，可按主机及子域限定，**每一跳重定向都按同样规则重查**，单次响应默认上限 4 MiB，默认不带 Cookie。`Bridge.Host()` 把它接进运行时，服务没有别的出口。
