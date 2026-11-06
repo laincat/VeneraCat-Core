@@ -11,6 +11,18 @@ English | [简体中文](STATUS.md)
 
 
 
+
+## moejs `df42231` decodes lazily; what a service sees is unchanged (2026-11-06)
+
+This round moved moejs to main `df42231`. The `0a0ed36...df42231` range is two commits over 42 files, and the one that touches Core is #3: **host strings are no longer decoded up front** - a string that is not ASCII, or is at least 64 KiB, keeps its UTF-8 bytes until its content is first read (`moejs.String` now calls `FromHostString` instead of `FromGoString`). In Core, a service's `fetch` body, `storageGet` and `secret` all take that path.
+
+`TestFetchBodiesDecodeLikeJavaScriptStrings` pins what a service gets:
+
+- `中文🐾` has length 4, its last unit is the low surrogate `0xDC3E`, and `JSON.stringify` keeps it intact
+- a 120,003-byte body (past the lazy threshold) has length 40,003 and `slice(-3)` reads `end` from its far end
+- one invalid byte reads as one U+FFFD, with the bytes around it kept
+
+The same test also passes on the old `0a0ed36`, so the behaviour is the same rather than true only on the new build; changing the expected length by one makes it fail (negative check). `go vet ./...` and `go test -race -count=1 ./...` (23 packages) pass, logs `E:/Temp/core-lazy-vet.log` and `E:/Temp/core-lazy-race.log`. The other commit, #8, only concerns JSON mapping of Go struct tags; Core exposes no tagged struct to JavaScript.
 ## Relicensed to LGPL-3.0-or-later, dependencies moved to their latest (2026-11-06)
 
 The repository was GPL-3.0. It is now **LGPL-3.0-or-later with the App Store / DRM Exception**, the exception clauses are the same ones the playback engine AetherEngine uses (the engine states v3 only; this project additionally says "or any later version"):

@@ -11,6 +11,18 @@
 
 
 
+
+## moejs `df42231` 的延迟解码：服务看到的字符串不变（2026-11-06）
+
+本轮把 moejs 跟到 main 的 `df42231`。对比 `0a0ed36...df42231` 只有两次提交、42 个文件，其中会影响 Core 的是 #3：**宿主交进来的字符串不再立刻解码**——非 ASCII 或 ≥64 KiB 的字符串先保留 UTF-8 字节，第一次读内容时才转成 UTF-16（`moejs.String` 从 `FromGoString` 改成 `FromHostString`）。Core 里服务的 `fetch` 响应体、`storageGet`、`secret` 都走这条路。
+
+回归 `TestFetchBodiesDecodeLikeJavaScriptStrings` 钉住服务能看到的结果：
+
+- `中文🐾` 长度 4、末位是代理对低半 `0xDC3E`、`JSON.stringify` 原样
+- 120,003 字节的大响应体（超过延迟阈值）长度 40,003，从尾部 `slice(-3)` 读到 `end`
+- 一个非法字节读成一个 U+FFFD，前后字节保留
+
+同一用例在旧版 `0a0ed36` 上也通过，说明行为一致而不是只在新版成立；把期望长度改错一位会失败（负向）。`go vet ./...` 与 `go test -race -count=1 ./...`（23 个包）通过，日志 `E:/Temp/core-lazy-vet.log`、`E:/Temp/core-lazy-race.log`。另一次提交 #8 只涉及 Go 结构体标签的 JSON 映射，Core 不向 JS 暴露带标签的结构体。
 ## 许可证改为 LGPL-3.0-or-later 并跟 AetherEngine 的最新依赖（2026-11-06）
 
 此前仓库是 GPL-3.0。现在改为 **LGPL-3.0-or-later 附 App Store / DRM 例外**，例外条款与播放引擎 AetherEngine 用的同一套（引擎自己声明 v3-only，我们这一份额外写明「或任何更新版本」）：

@@ -349,3 +349,73 @@ func TestDescribeRefusesAMalformedAnswer(t *testing.T) {
 		r.Close()
 	}
 }
+
+// A body the host hands over arrives as the JavaScript string it should be.
+//
+// moejs df42231 stopped decoding host strings up front: one that is not ASCII,
+// or is at least 64 KiB, keeps its UTF-8 bytes until it is first read. A
+// service's fetch body goes through exactly that path, so this pins what a
+// service sees: the length in UTF-16 units, characters outside the BMP as a
+// surrogate pair, a large body read from its far end, and an invalid byte as
+// U+FFFD rather than a crash or a silently dropped byte.
+func TestFetchBodiesDecodeLikeJavaScriptStrings(t *testing.T) {
+	big := strings.Repeat("漫", 40000) + "end" // 120,003 bytes, past the lazy threshold
+	bodies := map[string]string{
+		"cjk":     "中文🐾",
+		"big":     big,
+		"invalid": "a\xffb",
+	}
+	host := Host{Fetch: func(ctx context.Context, url string) (string, error) {
+		return bodies[strings.TrimPrefix(url, "https://example.invalid/")], nil
+	}}
+	const source = `
+export function handle(method) {
+  const s = fetch('https://example.invalid/' + method);
+  return {
+    length: s.length,
+    head: s.charCodeAt(0),
+    last: s.charCodeAt(s.length - 1),
+    tail: s.slice(-3),
+    second: s.charCodeAt(1),
+    json: JSON.stringify(s.slice(0, 4)),
+  };
+}
+`
+	r := NewRuntime(host, PermissionNetwork)
+	defer r.Close()
+	if err := r.Load(context.Background(), manifestFor(t, PermissionNetwork), source); err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		Length int    `json:"length"`
+		Head   int    `json:"head"`
+		Last   int    `json:"last"`
+		Tail   string `json:"tail"`
+		Second int    `json:"second"`
+		JSON   string `json:"json"`
+	}
+	call := func(method string) answer {
+		t.Helper()
+		out, err := r.Call(context.Background(), method, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		var a answer
+		if err := json.Unmarshal(out, &a); err != nil {
+			t.Fatalf("%s: %s: %v", method, out, err)
+		}
+		return a
+	}
+
+	// "中文" is two units; the paw is U+1F43E, a surrogate pair.
+	if a := call("cjk"); a.Length != 4 || a.Head != 0x4E2D || a.Last != 0xDC3E || a.JSON != `"中文🐾"` {
+		t.Fatalf("cjk = %+v", a)
+	}
+	if a := call("big"); a.Length != 40003 || a.Head != 0x6F2B || a.Tail != "end" {
+		t.Fatalf("big = %+v", a)
+	}
+	// One invalid byte is one U+FFFD, and the bytes around it survive.
+	if a := call("invalid"); a.Length != 3 || a.Second != 0xFFFD || a.Tail != "a\uFFFDb" {
+		t.Fatalf("invalid = %+v", a)
+	}
+}
