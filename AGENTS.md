@@ -11,6 +11,7 @@
 - 兼容目标:官方 Venera 的 `.venera` 备份,以及 legacy `ComicSource` 脚本与其订阅索引。其余功能按 `docs/` 中的插件规划实现。
 - 视频订阅使用 `vcvideo.json`,`"$schema": "vcvideo/1"`;发布订阅的仓库应添加 GitHub topic `vcvideo`。
 - 不要从 AGPL 项目(Animeko、AnimeFlow)或没有许可证的项目(AniCh)复制代码。Kazumi 是 GPL-3.0,KazumiRules 是 MIT;按行为重写,不要逐行翻译源码。
+- 许可证是 **LGPL-3.0-or-later 附 App Store / DRM 例外**(见 `LICENSE`,GPL-3.0 全文在 `COPYING`)。新文件沿用同一许可;引入新依赖前先看它的许可证能否并进来。
 - 不要在仓库中放入第三方凭据、账号或站点密钥。其他 App 内嵌的签名密钥不属于我们,不得再分发。
 - JSON 数字保持为 `json.Number` 或 `json.RawMessage`,ID 绝不经过 float64 舍入。
 
