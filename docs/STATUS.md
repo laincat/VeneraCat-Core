@@ -9,6 +9,18 @@
 
 
 
+
+## 缺 Collator 不等于不能排序（2026-11-05）
+
+上一条说「Intl.Collator 是 undefined」。上半句没说的是：`String.prototype.localeCompare` **在**，而且能用。官方源 `komga.js` 就是用它对书库排序的。
+
+实测：
+
+- `typeof "a".localeCompare` → `function`；`["b","A","c"].sort((x,y)=>x.localeCompare(y))` → `A,b,c`
+- `"ä".localeCompare("z", "sv")` → `-1`，**locale 参数被接受但不起作用**：排序是引擎自己的（大小写折叠、平局时大写在前），不是瑞典语的
+- `new Intl.Collator("en")` → `TypeError: Intl.Collator is not a constructor`
+
+所以缺的是**语言**，不是比较。要按某种语言排序的源必须自带表。回归 `TestCompatibilityLocaleCompareWorksWithoutCollator` 钉住这四条。
 ## 流式答复的解码器可以按片喂（2026-11-05）
 
 iOS 的标准接口仍显示「整包返回 · 流式尚未接通」。原因是两端的缺口不同：客户端有自己的传输（Cookie、取消、证书都在它手里），但**协议的 SSE 解析在 Core 的 `aiapi` 里**，没有移动出口。

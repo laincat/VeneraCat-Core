@@ -9,6 +9,18 @@ English | [简体中文](STATUS.md)
 
 
 
+
+## No Collator does not mean no sorting (2026-11-05)
+
+The entry above says "`Intl.Collator` is `undefined`". What it did not say is that `String.prototype.localeCompare` **is there and works**. The official source `komga.js` sorts its libraries with exactly that.
+
+Measured:
+
+- `typeof "a".localeCompare` gives `function`; `["b","A","c"].sort((x,y)=>x.localeCompare(y))` gives `A,b,c`
+- `"ä".localeCompare("z", "sv")` gives `-1`: the **locale argument is accepted and ignored**. The order is the engine's own (case folded, upper before lower on a tie), not Swedish's
+- `new Intl.Collator("en")` throws `TypeError: Intl.Collator is not a constructor`
+
+So what is missing is the *language*, not the comparison. A source that needs a language's order has to carry its own table. `TestCompatibilityLocaleCompareWorksWithoutCollator` pins all four points.
 ## The streaming decoder can be fed pieces (2026-11-05)
 
 iOS still says 「整包返回 · 流式尚未接通」 on the standard-protocol screen. The two sides have different gaps: the client owns the transport (cookies, cancellation and certificates are its business), but **the protocol's SSE parsing lives in Core's `aiapi`** with no mobile entry.

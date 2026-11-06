@@ -186,6 +186,40 @@ func TestCompatibilityIntlIsPartial(t *testing.T) {
 	}
 }
 
+// `Intl.Collator` is absent, but `String.prototype.localeCompare` is not: a
+// source that sorts with it works. `komga.js` sorts its libraries exactly that
+// way, so "no Collator" must not be read as "sorting is broken".
+//
+// What is missing is the locale: the argument is accepted and ignored, so the
+// order is the engine's own (case folded, upper before lower on a tie), not
+// Swedish's or German's. A source that needs a language's order has to carry
+// its own table.
+func TestCompatibilityLocaleCompareWorksWithoutCollator(t *testing.T) {
+	r, err := New(Options{}, Services{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+	if out, err := r.Eval(ctx, `typeof "a".localeCompare`); err != nil || string(out) != `"function"` {
+		t.Fatalf("localeCompare: %s %v", out, err)
+	}
+	if out, err := r.Eval(ctx, `["b","A","c"].sort((x,y) => x.localeCompare(y)).join(",")`); err != nil || string(out) != `"A,b,c"` {
+		t.Fatalf("sort: %s %v", out, err)
+	}
+	// The locale argument changes nothing: this is why the gap is documented as
+	// "no locale", not "no comparison".
+	if out, err := r.Eval(ctx, `"ä".localeCompare("z", "sv")`); err != nil || string(out) != "-1" {
+		t.Fatalf("locale argument was honoured: %s %v", out, err)
+	}
+	if out, err := r.Eval(ctx, `typeof Intl.Collator`); err != nil || string(out) != `"undefined"` {
+		t.Fatalf("Collator: %s %v", out, err)
+	}
+	if _, err := r.Eval(ctx, `new Intl.Collator("en")`); err == nil || !strings.Contains(err.Error(), "not a constructor") {
+		t.Fatalf("Intl.Collator: %v", err)
+	}
+}
+
 // A source whose single function is too large is told why, in words a source
 // author can act on, rather than only the engine's internal wording.
 func TestCompatibilityRegisterCeilingExplainsItself(t *testing.T) {
