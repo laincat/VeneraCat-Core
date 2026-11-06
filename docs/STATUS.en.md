@@ -12,6 +12,19 @@ English | [简体中文](STATUS.md)
 
 
 
+
+## Official-script sweep at 34/34: `jm`'s failure was the probe, not the engine (2026-11-06)
+
+The sweep always had one failure: loading `jm.js` gave `TypeError: Cannot read properties of null (reading 'length')`, previously recorded as "needs a live site `init` response". This round traced it to the end:
+
+- `jm`'s `init()` first awaits `refreshApiDomains()`, which fetches an **encrypted** domain list (AES-ECB plus base64) and decrypts it with its own `convertData`
+- the offline probe answered that address with an HTML page, `Convert.decodeBase64` did what the official client does - **return null and log an error** - and `jm`'s `convertData` then read `null.length`, which is exactly the reported line
+- with the probe answering in the site's shape (the list encrypted with the source's own domain secret; `/setting` answering `{"data": base64(AES-ECB(json))}` keyed by the time in the `tokenparam` header), **all 34 load**, log `E:/Temp/core-sweep-904ca7f.log`; removing the encrypted-list answer brings the failure back unchanged (negative check)
+- a separate reproduction, `E:/Temp/gosrcprobe/jmrepro`, loads `jm` with both answers and lists the addresses `jm` actually requested, log `E:/Temp/core-jm-repro.log`
+
+Conclusion: **no engine gap**; the fixture answered in the wrong shape. `TestCompatibilityFailedConversionIsNullAndLogged` pins "a failed conversion returns null and logs, without throwing" and the exact line produced when that null is used further, so the next sweep does not file it as a compatibility problem again. `go test -race -count=1 ./...` passes across 23 packages, log `E:/Temp/core-jm-race.log`.
+
+The probe lives outside the repository (the scripts are other people's work and cannot be committed); it proves the load phase only, not how the site behaves today.
 ## moejs `df42231` decodes lazily; what a service sees is unchanged (2026-11-06)
 
 This round moved moejs to main `df42231`. The `0a0ed36...df42231` range is two commits over 42 files, and the one that touches Core is #3: **host strings are no longer decoded up front** - a string that is not ASCII, or is at least 64 KiB, keeps its UTF-8 bytes until its content is first read (`moejs.String` now calls `FromHostString` instead of `FromGoString`). In Core, a service's `fetch` body, `storageGet` and `secret` all take that path.

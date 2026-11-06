@@ -12,6 +12,19 @@
 
 
 
+
+## 官方脚本巡检 34/34：`jm` 的失败是探针，不是引擎（2026-11-06）
+
+巡检里一直有一个失败：`jm.js` 加载时 `TypeError: Cannot read properties of null (reading 'length')`，此前记为「需要真实站点 `init` 响应」。这轮把它查到底：
+
+- `jm` 的 `init()` 先 `await refreshApiDomains()`，去取一份**加密的**线路列表（AES-ECB + base64），再用自己的 `convertData` 解密
+- 离线探针对这个地址回的是一段 HTML，`Convert.decodeBase64` 按官方行为**返回 null 并记一条错误日志**，`jm` 的 `convertData` 随后读 `null.length` —— 这正是报出来的那句
+- 探针改为按站点的形状回答（列表用源自带的域名密钥加密；`/setting` 回 `{"data": base64(AES-ECB(json))}`，密钥取请求头 `tokenparam` 里的时间）后，**34 份 / 34 加载成功**，日志 `E:/Temp/core-sweep-904ca7f.log`；去掉加密列表那一条回答，失败原样回来（负向）
+- 单独的复现程序 `E:/Temp/gosrcprobe/jmrepro` 两种回答都能加载，并列出 `jm` 实际请求的地址，日志 `E:/Temp/core-jm-repro.log`
+
+结论：**没有引擎缺口**，是夹具回错了形状。回归 `TestCompatibilityFailedConversionIsNullAndLogged` 钉住「转换失败返回 null 并记日志、不抛错」以及把 null 继续往下用时报出的原句，免得下次巡检又把它当成兼容问题。`go test -race -count=1 ./...` 23 个包通过，日志 `E:/Temp/core-jm-race.log`。
+
+探针在仓库外（脚本是别人的作品，不能进仓库）；它只证明加载期，不证明站点今天的真实行为。
 ## moejs `df42231` 的延迟解码：服务看到的字符串不变（2026-11-06）
 
 本轮把 moejs 跟到 main 的 `df42231`。对比 `0a0ed36...df42231` 只有两次提交、42 个文件，其中会影响 Core 的是 #3：**宿主交进来的字符串不再立刻解码**——非 ASCII 或 ≥64 KiB 的字符串先保留 UTF-8 字节，第一次读内容时才转成 UTF-16（`moejs.String` 从 `FromGoString` 改成 `FromHostString`）。Core 里服务的 `fetch` 响应体、`storageGet`、`secret` 都走这条路。

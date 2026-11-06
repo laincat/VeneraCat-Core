@@ -220,6 +220,47 @@ func TestCompatibilityLocaleCompareWorksWithoutCollator(t *testing.T) {
 	}
 }
 
+// A conversion that fails yields null and a log line, as the official client
+// does; it does not throw. The sweep's one remaining failure, jm's init, is
+// this and not an engine gap: jm's init awaits refreshApiDomains, which fetches
+// an encrypted domain list, and the offline probe answered that fetch with an
+// HTML page. Convert.decodeBase64 returned null and jm's own convertData read
+// `.length` of it. With the list answered in the encrypted shape the site uses,
+// jm loads; removing that answer brings the failure back. Pinning the null
+// keeps the next sweep from filing the same failure as a compatibility gap.
+func TestCompatibilityFailedConversionIsNullAndLogged(t *testing.T) {
+	var lines []string
+	r, err := New(Options{}, Services{Log: func(level, title, content string) {
+		lines = append(lines, level+"|"+content)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+	out, err := r.Eval(ctx, `(function () {
+  try { const d = Convert.decodeBase64('<html>'); return d === null ? 'null' : typeof d }
+  catch (e) { return 'threw: ' + e }
+})()`)
+	if err != nil || string(out) != `"null"` {
+		t.Fatalf("decodeBase64 of a page: %s %v", out, err)
+	}
+	logged := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "error|") && strings.Contains(line, "Failed to convert base64") {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Fatalf("the failure was not logged: %q", lines)
+	}
+	// What jm's convertData does next, and the exact error the sweep reported.
+	_, err = r.Eval(ctx, `Convert.decryptAesEcb(Convert.decodeBase64('<html>'), Convert.encodeUtf8('0123456789abcdef')).length`)
+	if err == nil || !strings.Contains(err.Error(), "Cannot read properties of null (reading 'length')") {
+		t.Fatalf("null fed onward: %v", err)
+	}
+}
+
 // A source whose single function is too large is told why, in words a source
 // author can act on, rather than only the engine's internal wording.
 func TestCompatibilityRegisterCeilingExplainsItself(t *testing.T) {
