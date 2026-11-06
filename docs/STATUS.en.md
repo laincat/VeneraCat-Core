@@ -13,12 +13,12 @@ English | [简体中文](STATUS.md)
 
 ## Relicensed to LGPL-3.0-or-later, dependencies moved to their latest (2026-11-06)
 
-The repository was GPL-3.0. It is now **LGPL-3.0-or-later with the App Store / DRM Exception**, the same terms the playback engine AetherEngine uses:
+The repository was GPL-3.0. It is now **LGPL-3.0-or-later with the App Store / DRM Exception**, the exception clauses are the same ones the playback engine AetherEngine uses (the engine states v3 only; this project additionally says "or any later version"):
 
 - `LICENSE` is this project's LGPL-3.0 text plus the exception (distribution of a statically linked binary through the App Store, TestFlight and similar platforms is permitted, and the platform's re-signing, DRM or ban on user re-linking does not breach the licence); the GPL-3.0 text LGPL incorporates is in `COPYING`
 - the exception covers the binary distribution path only and changes no source obligation: the corresponding source is still in the public upstream repository, and recipients keep every right GPL-3.0 / LGPL-3.0 grants them
 
-Why the exception: on iOS the app and Core are statically linked, and App Store terms forbid both user re-linking and third-party re-signing - exactly what LGPL sections 4-6 require. Without the exception LGPL contradicts itself on iOS. AetherEngine already solved this with the same clauses, so we match it.
+Why the exception: on iOS the app and Core are statically linked, and App Store terms forbid both user re-linking and third-party re-signing - exactly what LGPL sections 4-6 require. Without the exception LGPL contradicts itself on iOS. AetherEngine already solved this with the same exception, so we match it; it states v3 only, while our grant adds "or any later version".
 
 Dependencies at this round's latest: moejs to main `df42231` (development build: this kind of library moves fast and fixes bugs fast), `modernc.org/sqlite` 1.61.1, `libc` 1.80.1, `groupcache` `2c02b82`; `go test ./...` across 23 packages; the official-script sweep loaded 33 of 34 (`jm` still needs a real site `init` response, unchanged).
 ## No Collator does not mean no sorting (2026-11-05)

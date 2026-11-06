@@ -13,12 +13,12 @@
 
 ## 许可证改为 LGPL-3.0-or-later 并跟 AetherEngine 的最新依赖（2026-11-06）
 
-此前仓库是 GPL-3.0。现在改为 **LGPL-3.0-or-later 附 App Store / DRM 例外**，条款与播放引擎 AetherEngine 用的同一套：
+此前仓库是 GPL-3.0。现在改为 **LGPL-3.0-or-later 附 App Store / DRM 例外**，例外条款与播放引擎 AetherEngine 用的同一套（引擎自己声明 v3-only，我们这一份额外写明「或任何更新版本」）：
 
 - `LICENSE` 是本项目的 LGPL-3.0 全文加例外（允许通过 App Store / TestFlight 等平台分发静态链接的二进制，且不因平台的再签名、DRM 或禁止用户重链接而违约），LGPL 引用的 GPL-3.0 全文在 `COPYING`
 - 例外只覆盖二进制分发路径，不改变源码义务：对应源码仍在上游公开仓库，接收方保留 GPL-3.0 / LGPL-3.0 下的全部权利
 
-为什么需要例外：iOS 上 App 与 Core 是静态链接，App Store 的分发条款既不允许用户重链接，也限制再签名，而 LGPL 的 4—6 节恰恰要求这些。没有例外，LGPL 在 iOS 上自相矛盾。AetherEngine 已经用同一套条款解决了这件事，直接对齐。
+为什么需要例外：iOS 上 App 与 Core 是静态链接，App Store 的分发条款既不允许用户重链接，也限制再签名，而 LGPL 的 4—6 节恰恰要求这些。没有例外，LGPL 在 iOS 上自相矛盾。AetherEngine 已经用同一套例外解决了这件事，直接对齐；它写 v3-only，我们的授予句多一句「或任何更新版本」。
 
 依赖同步到本轮最新：moejs 到 main 的 `df42231`（开发版：这类库迭代快，修 bug 也快），`modernc.org/sqlite` 1.61.1、`libc` 1.80.1、`groupcache` `2c02b82`；`go test ./...` 23 个包通过；官方脚本巡检 34 份 / 33 加载成功（`jm` 仍需要真实站点 `init` 响应，与之前一致）。
 ## 缺 Collator 不等于不能排序（2026-11-05）
