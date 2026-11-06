@@ -434,7 +434,7 @@ CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`�
 3. 真实世界源无法进仓库(wnacg 等没有许可证),所以 CI 的漫画全链路用自己写的内联源(`mobile/mobile_test.go` 的 `comic`、`comic/js/async_test.go` 的 `miniSource`)跑;真实源兼容性由 Nekophage 的 `TestLiveSource` 在仓库外验证。
 4. 视频下载与离线缓存、弹幕、Bangumi:未做(第二阶段)。
 5. AniBaka `anx-rule/2` 流水线规则:未做(第二阶段)。
-6. **把分段传输接进客户端**:Core 侧的分段桥、包桥与标准接口的流式解码都已就位;iOS 已实现 `CoreStreamHost` 并用 `NewMagpieWithStream` 建 Magpie 实例,但主 `Core` 仍用 `New` 建,标准接口页面也还没接 `SendAIRequestStream`,所以标准接口目前仍整包返回。桌面端仍未实现 `HostStream`。
+6. **把分段传输接进客户端**:Core 侧的分段桥、包桥与标准接口的流式解码都已就位。iOS 两处都已接上:`CoreStreamHost` + `NewMagpieWithStream` 建 Magpie 实例,标准接口页面也已改成按增量显示(Nekularity `b81b52d`,pin `49f2452`,Kit 482 项测试);主 `Core` 实例仍用 `New` 建,因为漫画调用不产出分段。桌面端仍未实现 `HostStream`,所以桌面仍是整包返回。
 
 ## 标准流式响应的完成条件与打开阶段取消(2026-11-03)
 

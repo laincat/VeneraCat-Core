@@ -433,7 +433,7 @@ An independent review found 12 issues (4 high, 5 medium, 3 low), **all fixed wit
 3. Real-world sources cannot go into the repository (wnacg and others have no licence), so CI drives the whole comic pipeline with sources we wrote ourselves (`comic` in `mobile/mobile_test.go`, `miniSource` in `comic/js/async_test.go`); real-source compatibility is checked outside the repository by Nekophage's `TestLiveSource`.
 4. Video download and offline cache, danmaku, Bangumi: not done (second phase).
 5. AniBaka `anx-rule/2` pipeline rules: not done (second phase).
-6. **Wire chunked transport into the clients**: the Core-side bridge, the package bridge and standard-protocol stream decoding are all in place; iOS implements `CoreStreamHost` and builds the Magpie runner with `NewMagpieWithStream`, but the main `Core` is still built with `New` and the standard-interface screen has not been wired to `SendAIRequestStream`, so standard calls still return whole replies. The desktop has no `HostStream` implementation yet.
+6. **Wire chunked transport into the clients**: the Core-side bridge, the package bridge and standard-protocol stream decoding are all in place. iOS is wired in both places: `CoreStreamHost` plus `NewMagpieWithStream` for the Magpie runner, and the standard-interface screen now paints each increment (Nekularity `b81b52d`, pin `49f2452`, 482 kit tests). The main `Core` instance still uses `New`, because comic calls produce no chunks. The desktop has no `HostStream` implementation yet, so the desktop still returns whole replies.
 
 ## Standard stream completion and cancellation during open (2026-11-03)
 
