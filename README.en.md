@@ -7,7 +7,7 @@ English | [简体中文](README.md)
   <img src="docs/assets/brand/veneracat-core-logo.png" alt="VeneraCat Core" width="720">
 </picture>
 
-The shared core of Nekularity (iOS/iPadOS) and Nekophage (desktop), written in Go and licensed under GPL-3.0-or-later.
+The shared core of Nekularity (iOS/iPadOS) and Nekophage (desktop), written in Go and licensed under LGPL-3.0-or-later with the App Store / DRM Exception.
 
 ## Features
 

@@ -7,7 +7,7 @@
   <img src="docs/assets/brand/veneracat-core-logo.png" alt="VeneraCat Core" width="720">
 </picture>
 
-Nekularity(iOS/iPadOS)与 Nekophage(桌面)共用的核心库,使用 Go 编写,许可证为 GPL-3.0-or-later。
+Nekularity(iOS/iPadOS)与 Nekophage(桌面)共用的核心库,使用 Go 编写,许可证为 LGPL-3.0-or-later(附 App Store / DRM 例外)。
 
 ## 功能
 

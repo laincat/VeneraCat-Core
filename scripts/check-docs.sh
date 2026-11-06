@@ -7,7 +7,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-ROOT_ALLOWED=".git .github .gitattributes .gitignore AGENTS.md AGENTS.en.md LICENSE README.md README.en.md go.mod go.sum
+ROOT_ALLOWED=".git .github .gitattributes .gitignore AGENTS.md AGENTS.en.md LICENSE COPYING README.md README.en.md go.mod go.sum
 apple attribution aiapi backup challenge comic docs host magpierouting magpieplugin mobile plugin scripts service subscription version video build"
 
 fail=0
