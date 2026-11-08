@@ -13,6 +13,14 @@
 
 
 
+## Convert 与独立实现的差分（2026-11-08）
+
+官方源调用的 `Convert` 函数（`encodeUtf8` 20 处、`encode/decodeBase64` 各 7、`decodeUtf8` 6、`md5` 5、`hexEncode` 5、`hmacString` 3、`decryptAesCbc` 2、`sha512`/`sha256`/`decryptAesEcb` 各 1）按源里的调用形状写成 31 条用例，期望值由 Node v26.12.1 的 crypto（OpenSSL 3.5.9）独立算出。**可比的 29 条中 27 条一致**：md5/sha1/sha256/sha512、HMAC（含长于块的密钥）、base64 两向（含无填充）、UTF-8 非法字节替换、AES-ECB/CBC/CFB8/CFB128/OFB 全部一致；AES 解密保留 PKCS#7 填充，与 Venera 一致、由源自行剥除。
+
+唯一差异是 `decryptRsa` 收到 PEM 格式密钥（PKCS#8 或 PKCS#1）时返回 `null`。宿主契约规定密钥为 base64 PKCS#8 DER，去掉 PEM 外壳后即可解密；没有官方源调用 `decryptRsa`，所以按契约保留并由测试锁定，不扩大接受范围。
+
+新增 `comic/js/convert_differential_test.go`：14 条确定性用例携带 Node/OpenSSL 期望值，另一条锁定 RSA 的 base64 PKCS#8 契约（PEM 为 `null` 且记日志、去壳后可解）。变异检验：把 HMAC 改为大写 hex 后测试失败，还原后通过。`go test ./...` 23 包 PASS，官方源巡检 **34/34**。只加测试、不改生产代码，两端 pin 不跟进。证据 `E:/Code/deliveries/2026-11-08-core-convert-differential/`。
+
 ## `new URL` 解析 `.`/`..` 路径段（2026-11-08）
 
 用 Node v26.12.1 的 WHATWG URL 做差分：53 条官方源实际用到的内建（`replaceAll`、`matchAll`、BigInt、后行断言、命名分组、私有字段、`Date.parse` 各格式等）**52 条一致**，唯一差异是 `new URL('../img/1.jpg', 'https://a.com/b/c/d.html')`——Core 原样返回 `/b/c/../img/1.jpg`，浏览器为 `/b/img/1.jpg`。字面 `..` 会被签名 CDN 或严格服务器拒绝。再测 20 条 URL 路径用例，修复前 15 条不一致。

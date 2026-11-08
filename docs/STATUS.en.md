@@ -13,6 +13,14 @@ English | [简体中文](STATUS.md)
 
 
 
+## Convert against an independent implementation (2026-11-08)
+
+The `Convert` functions the official sources call (`encodeUtf8` 20 times, `encode/decodeBase64` 7 each, `decodeUtf8` 6, `md5` 5, `hexEncode` 5, `hmacString` 3, `decryptAesCbc` 2, `sha512`/`sha256`/`decryptAesEcb` once each) were written up as 31 cases shaped like the sources' own calls, with expected values computed independently by Node v26.12.1's crypto (OpenSSL 3.5.9). **27 of the 29 comparable cases agree**: md5/sha1/sha256/sha512, HMAC (including a key longer than a block), base64 both ways (including unpadded), UTF-8 replacement of invalid bytes, and AES-ECB/CBC/CFB8/CFB128/OFB. AES decrypt keeps the PKCS#7 padding, as Venera does; the sources strip it.
+
+The only difference is that `decryptRsa` returns `null` for a PEM key (PKCS#8 or PKCS#1). The host contract defines the key as base64 PKCS#8 DER, and with the PEM armour removed it decrypts. No official source calls `decryptRsa`, so the contract is kept and pinned by a test rather than widened.
+
+New `comic/js/convert_differential_test.go`: 14 deterministic cases carry the Node/OpenSSL expected values, and one more pins the RSA base64 PKCS#8 contract (PEM gives `null` and is logged; the stripped key decrypts). Mutation check: making HMAC return upper-case hex fails the test, and restoring it passes. `go test ./...` passes all 23 packages and the official-source sweep is **34/34**. Tests only, no production change, so neither client pin moves. Evidence `E:/Code/deliveries/2026-11-08-core-convert-differential/`.
+
 ## `new URL` resolves `.`/`..` path segments (2026-11-08)
 
 A differential against Node v26.12.1's WHATWG URL: of 53 built-ins the official sources actually use (`replaceAll`, `matchAll`, BigInt, lookbehind, named groups, private fields, `Date.parse` formats and more), **52 agree**. The one difference was `new URL('../img/1.jpg', 'https://a.com/b/c/d.html')`: Core returned the literal `/b/c/../img/1.jpg` where a browser gives `/b/img/1.jpg`, and a literal `..` is refused by signed CDN paths and strict servers. A further 20 URL path cases disagreed on 15 before the fix.
