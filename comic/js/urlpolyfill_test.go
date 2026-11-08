@@ -86,10 +86,71 @@ func TestURLResolvesDotSegments(t *testing.T) {
 	}
 }
 
-// Two differences from the browser stay on purpose, and are pinned so a change
-// to either shows up here. `href` rebuilds the query from searchParams, so a
-// `/` in a value comes back as `%2F` (the server receives the same parameter);
-// and a scheme sources do not use keeps its path as written.
+// The query is now kept byte-for-byte until searchParams is edited, so a
+// signed `?sig=a/b` survives. Values that were already escaped stay escaped.
+// Reading a parameter must not rewrite anything; editing one does switch the
+// URL to the encoded form, as the browser does.
+func TestURLKeepsTheRawQueryUntilEdited(t *testing.T) {
+	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	cases := []struct{ script, want string }{
+		{`new URL("https://a.com/p?sig=a/b&x=1+2").href`, `"https://a.com/p?sig=a/b&x=1+2"`},
+		{`new URL("https://a.com/p?sig=a/b").search`, `"?sig=a/b"`},
+		{`new URL("https://a.com/p?q=%2f%20x&sig=a/b").href`, `"https://a.com/p?q=%2f%20x&sig=a/b"`},
+		{`new URL("https://a.com/p?").href`, `"https://a.com/p?"`},
+		{`new URL("https://a.com/p?").search`, `""`},
+		{`new URL("https://a.com/p").href`, `"https://a.com/p"`},
+		{`new URL('../img?sig=a/b', "https://a.com/b/c/d.html").href`, `"https://a.com/b/img?sig=a/b"`},
+		{`(() => { const u = new URL("https://a.com/p?sig=a/b"); u.searchParams.get("sig"); return u.href })()`, `"https://a.com/p?sig=a/b"`},
+		{`(() => { const u = new URL("https://a.com/p?sig=a/b"); u.searchParams.set("y", "z"); return u.href })()`, `"https://a.com/p?sig=a%2Fb&y=z"`},
+		{`(() => { const u = new URL("https://a.com/p?sig=a/b"); u.searchParams.append("z", "1"); return u.href })()`, `"https://a.com/p?sig=a%2Fb&z=1"`},
+		{`(() => { const u = new URL("https://a.com/p?a=1"); u.searchParams.delete("a"); return u.href })()`, `"https://a.com/p"`},
+		{`(() => { const u = new URL("https://a.com/p"); u.search = "?sig=a/b"; return u.href })()`, `"https://a.com/p?sig=a/b"`},
+		{`(() => { const u = new URL("https://a.com/p?a=1"); u.search = ""; return u.href })()`, `"https://a.com/p"`},
+		{`(() => { const u = new URL("https://a.com/p"); u.search = "?"; return u.href })()`, `"https://a.com/p?"`},
+		{`new URLSearchParams({a: "!'()*~ a/b"}).toString()`, `"a=%21%27%28%29*%7E+a%2Fb"`},
+	}
+	for _, c := range cases {
+		got, err := r.Eval(ctx, c.script)
+		if err != nil || string(got) != c.want {
+			t.Fatalf("%s: got %s, want %s, err %v", c.script, got, c.want, err)
+		}
+	}
+}
+
+// Fragment edits used to lose the `#` entirely (`u.hash = "y"` produced
+// `https://a.com/py`), and an empty fragment is still a visible `#` in href.
+func TestURLHashKeepsItsMarker(t *testing.T) {
+	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	cases := []struct{ script, want string }{
+		{`new URL("https://a.com/p#a/b?q=1").href`, `"https://a.com/p#a/b?q=1"`},
+		{`new URL("https://a.com/p#").href`, `"https://a.com/p#"`},
+		{`new URL("https://a.com/p#").hash`, `""`},
+		{`(() => { const u = new URL("https://a.com/p"); u.hash = "y"; return u.href })()`, `"https://a.com/p#y"`},
+		{`(() => { const u = new URL("https://a.com/p#x"); u.hash = ""; return u.href })()`, `"https://a.com/p"`},
+		{`(() => { const u = new URL("https://a.com/p?sig=a/b#x"); u.hash = "y"; return u.href })()`, `"https://a.com/p?sig=a/b#y"`},
+	}
+	for _, c := range cases {
+		got, err := r.Eval(ctx, c.script)
+		if err != nil || string(got) != c.want {
+			t.Fatalf("%s: got %s, want %s, err %v", c.script, got, c.want, err)
+		}
+	}
+}
+
+// One difference from the browser stays: a scheme sources do not use keeps its
+// path as written, including dot segments. Pinned so a change shows up here.
 func TestURLKnownDifferencesFromTheBrowser(t *testing.T) {
 	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
 	if err != nil {
@@ -99,7 +160,7 @@ func TestURLKnownDifferencesFromTheBrowser(t *testing.T) {
 	ctx := context.Background()
 
 	cases := []struct{ script, want string }{
-		{`new URL("https://a.com/a/../b?p=../q").href`, `"https://a.com/b?p=..%2Fq"`},
+		{`new URL("https://a.com/a/../b?p=../q").href`, `"https://a.com/b?p=../q"`},
 		{`new URL("https://a.com/a/../b?p=../q").searchParams.get("p")`, `"../q"`},
 		{`new URL("foo:/a/../b").pathname`, `"/a/../b"`},
 	}

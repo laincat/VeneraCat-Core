@@ -757,12 +757,22 @@
   }
 
   function encodeQuery(text) {
-    return encodeURIComponent(String(text)).replace(/%20/g, '+');
+    // application/x-www-form-urlencoded leaves `*`, `-`, `.` and `_` alone and
+    // escapes `!`, `'`, `(`, `)` and `~`; encodeURIComponent does the opposite
+    // for that second set. A query rebuilt by the browser must have the same
+    // bytes, or a signed parameter changes meaning.
+    return encodeURIComponent(String(text))
+      .replace(/[!'()~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())
+      .replace(/%20/g, '+');
   }
 
   class URLSearchParams {
-    constructor(init) {
+    // A URL owns this object and wants to know when it was edited: until then
+    // the URL keeps the exact query string it was given, including escapes and
+    // a bare `?`. Any edit switches the URL over to the encoded form.
+    constructor(init, onEdit) {
       this._pairs = [];
+      this._onEdit = typeof onEdit === 'function' ? onEdit : null;
       if (init == null) return;
       if (typeof init === 'string') {
         this._pairs = searchParamsOf(init.replace(/^\?/, ''));
@@ -786,24 +796,32 @@
       return this._pairs.some(([key]) => key === String(name));
     }
 
+    edited() {
+      if (this._onEdit) this._onEdit();
+    }
+
     append(name, value) {
       this._pairs.push([String(name), String(value)]);
+      this.edited();
     }
 
     set(name, value) {
       const key = String(name);
       const at = this._pairs.findIndex(([k]) => k === key);
-      if (at === -1) { this._pairs.push([key, String(value)]); return; }
+      if (at === -1) { this._pairs.push([key, String(value)]); this.edited(); return; }
       this._pairs[at] = [key, String(value)];
       this._pairs = this._pairs.filter(([k], i) => k !== key || i === at);
+      this.edited();
     }
 
     delete(name) {
       this._pairs = this._pairs.filter(([key]) => key !== String(name));
+      this.edited();
     }
 
     sort() {
       this._pairs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+      this.edited();
     }
 
     forEach(fn, thisArg) {
@@ -885,21 +903,54 @@
       if (SPECIAL_SCHEMES.indexOf(this.protocol) !== -1) {
         this.pathname = removeDotSegments(this.pathname);
       }
+      // The query is kept exactly as written. A signed URL's `?sig=a/b` is a
+      // different request from `?sig=a%2Fb`, and pre-escaped bytes such as
+      // `%2f` must not be decoded and re-encoded. Only an edit through
+      // searchParams replaces the string with its encoded form. `null` means
+      // there was no `?` at all; `''` means a bare `?`.
+      this._query = absolute[4] === undefined ? null : absolute[4];
+      this._queryEdited = false;
       this.searchParams = new URLSearchParams(absolute[4] || '');
-      this.hash = absolute[5] === undefined ? '' : '#' + absolute[5];
+      // `hash` is a getter below; `_hash` keeps the marker even for an empty
+      // fragment, because `https://a.com/p#` is a different href from
+      // `https://a.com/p` even though both report `hash === ''`.
+      this._hash = absolute[5] === undefined ? '' : '#' + absolute[5];
     }
 
-    // `search` and `searchParams` are one value in the browser: a source that
-    // does `u.searchParams.set("page", 2)` and then fetches `u.search` expects
-    // the new query, so the string is derived rather than stored separately.
+    get searchParams() { return this._params; }
+
+    set searchParams(value) {
+      this._params = value;
+      // Rebind when a source replaces the object, so edits are still observed.
+      if (value && typeof value.edited === 'function') {
+        value._onEdit = () => { this._queryEdited = true; };
+      }
+    }
+
+    get hash() { return this._hash === '#' ? '' : this._hash; }
+
+    set hash(value) {
+      const text = String(value == null ? '' : value);
+      this._hash = text === '' ? '' : (text.startsWith('#') ? text : '#' + text);
+    }
+
+    // `search` and `searchParams` are one value in the browser: an edit through
+    // searchParams has to show up in `search`, while an untouched URL keeps the
+    // string it was given.
     get search() {
-      const query = this.searchParams.toString();
-      return query ? '?' + query : '';
+      if (this._queryEdited) {
+        const query = this._params.toString();
+        return query ? '?' + query : '';
+      }
+      return !this._query ? '' : '?' + this._query;
     }
 
     set search(value) {
       const text = String(value == null ? '' : value);
-      this.searchParams = new URLSearchParams(text.replace(/^\?/, ''));
+      this._query = text === '' ? null
+        : (text === '?' ? '' : text.replace(/^\?/, ''));
+      this._queryEdited = false;
+      this.searchParams = new URLSearchParams(this._query || '');
     }
 
     get host() {
@@ -914,9 +965,11 @@
       const credentials = this.username
         ? this.username + (this.password ? ':' + this.password : '') + '@'
         : '';
-      const query = this.searchParams.toString();
+      const query = this._queryEdited
+        ? (this._params.toString() ? '?' + this._params.toString() : '')
+        : (this._query === null ? '' : '?' + this._query);
       return this.protocol + '//' + credentials + this.host + this.pathname
-        + (query ? '?' + query : '') + this.hash;
+        + query + this._hash;
     }
 
     toString() { return this.href; }

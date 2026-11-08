@@ -13,6 +13,21 @@
 
 
 
+## `new URL` 保留原始查询串与片段标记（2026-11-08）
+
+上一轮把「`href` 从 searchParams 重建查询」记为有意保留的差异，这是错的：它改变签名 URL 的字节。以 Node v26.12.1 的 WHATWG URL 为参照做 23 条最小复现，修复前只有 12 条一致，暴露 11 处差异：
+
+- `?sig=a/b&x=1+2` 被重写为 `?sig=a%2Fb&x=1+2`；已转义的 `%2f%20x` 被解码再编码成 `%2F+x`。签名参数因此失效。
+- 裸 `?`（`https://a.com/p?`）在 `href` 中丢失。
+- `u.hash = "y"` 生成 `https://a.com/py`：`#` 丢失，且设置 hash 会连带重写查询。
+- `URLSearchParams.toString()` 未转义 `!'()~`，与表单编码规则不符。
+
+修复（`comic/js/init.js`）：保留原始查询串（含既有转义与裸 `?`），仅在 `searchParams` 被 `set/append/delete/sort` 编辑后改为编码形式；`search` setter 与 `hash` setter 按标准处理；`encodeQuery` 补齐 `!'()~` 转义；片段标记单独保存，空片段仍输出 `#` 而 `hash` getter 返回 `""`。
+
+修复后 **23/23 与 Node 一致**；URL 点段差分从 18/20 升到 19/20（剩余一条为非特殊 scheme，测试锁定）；内建差分 53/53。新增 `TestURLKeepsTheRawQueryUntilEdited`、`TestURLHashKeepsItsMarker`，变异检验：换回旧 `init.js` 两条新测试均失败，还原后通过。`go test ./...` 23 包 PASS，官方源巡检 **34/34**。证据 `E:/Code/deliveries/2026-11-08-core-url-raw-query/`。
+
+**这是生产 `init.js` 行为变更，两端 pin 需跟进。**
+
 ## Convert 与独立实现的差分（2026-11-08）
 
 官方源调用的 `Convert` 函数（`encodeUtf8` 20 处、`encode/decodeBase64` 各 7、`decodeUtf8` 6、`md5` 5、`hexEncode` 5、`hmacString` 3、`decryptAesCbc` 2、`sha512`/`sha256`/`decryptAesEcb` 各 1）按源里的调用形状写成 31 条用例，期望值由 Node v26.12.1 的 crypto（OpenSSL 3.5.9）独立算出。**可比的 29 条中 27 条一致**：md5/sha1/sha256/sha512、HMAC（含长于块的密钥）、base64 两向（含无填充）、UTF-8 非法字节替换、AES-ECB/CBC/CFB8/CFB128/OFB 全部一致；AES 解密保留 PKCS#7 填充，与 Venera 一致、由源自行剥除。

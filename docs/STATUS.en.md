@@ -13,6 +13,21 @@ English | [简体中文](STATUS.md)
 
 
 
+## `new URL` keeps the raw query and the fragment marker (2026-11-08)
+
+The previous round recorded "`href` rebuilds the query from searchParams" as a deliberate difference. That was wrong: it changes the bytes of a signed URL. A 23-case minimal reproduction against Node v26.12.1's WHATWG URL agreed on only 12 cases before the fix and exposed 11 differences:
+
+- `?sig=a/b&x=1+2` became `?sig=a%2Fb&x=1+2`; already-escaped `%2f%20x` was decoded and re-encoded as `%2F+x`. A signed parameter no longer matches.
+- A bare `?` (`https://a.com/p?`) disappeared from `href`.
+- `u.hash = "y"` produced `https://a.com/py`: the `#` was lost, and setting the hash also rewrote the query.
+- `URLSearchParams.toString()` left `!'()~` unescaped, unlike the form-encoding rules.
+
+Fix (`comic/js/init.js`): keep the query exactly as written (including existing escapes and a bare `?`) and switch to the encoded form only after `searchParams` is edited by `set/append/delete/sort`; handle the `search` and `hash` setters as the standard does; escape `!'()~` in `encodeQuery`; store the fragment marker separately so an empty fragment still emits `#` while the `hash` getter returns `""`.
+
+After the fix **23/23 agree with Node**; the URL dot-segment differential rises from 18/20 to 19/20 (the remaining case is a non-special scheme, pinned by a test); the built-in differential is 53/53. New tests `TestURLKeepsTheRawQueryUntilEdited` and `TestURLHashKeepsItsMarker`; mutation check: restoring the old `init.js` fails both, restoring the fix passes. `go test ./...` passes all 23 packages and the official-source sweep is **34/34**. Evidence `E:/Code/deliveries/2026-11-08-core-url-raw-query/`.
+
+**This is a production `init.js` behaviour change; both client pins must follow.**
+
 ## Convert against an independent implementation (2026-11-08)
 
 The `Convert` functions the official sources call (`encodeUtf8` 20 times, `encode/decodeBase64` 7 each, `decodeUtf8` 6, `md5` 5, `hexEncode` 5, `hmacString` 3, `decryptAesCbc` 2, `sha512`/`sha256`/`decryptAesEcb` once each) were written up as 31 cases shaped like the sources' own calls, with expected values computed independently by Node v26.12.1's crypto (OpenSSL 3.5.9). **27 of the 29 comparable cases agree**: md5/sha1/sha256/sha512, HMAC (including a key longer than a block), base64 both ways (including unpadded), UTF-8 replacement of invalid bytes, and AES-ECB/CBC/CFB8/CFB128/OFB. AES decrypt keeps the PKCS#7 padding, as Venera does; the sources strip it.
