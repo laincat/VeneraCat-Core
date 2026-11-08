@@ -13,6 +13,16 @@
 
 
 
+## 两端 pin 与 main 的差距核对（2026-11-08）
+
+客户端 pin 仍是 `d9a18516520b19f70ce9ff791cfeca408df8128e`，Core main 已到 `15187e9`，中间 7 个提交：`904ca7f`（moejs 延迟解码回归）、`15187e9`（register 上限兼容回归）、`1645266`/`4f9fc41`/`283275a`/`3aaf55e`/`87651ec`（许可证措辞、AGENTS 规则、依赖升级记录）。
+
+核对结果：这 7 个提交**没有一行生产代码改动**——`git diff --name-only d9a1851..HEAD -- '*.go'` 排除 `_test.go` 后为 **0 个文件**，`go.mod`/`go.sum` 也未变。全部是测试与文档。因此**两端 pin 不需要跟进**：pin 后的行为已经在 pin 里，改的是"证明它"的测试。
+
+已在 pin 上跑过的证据：官方源巡检 **34 scripts / 0 failed**（`E:/Temp/core-sweep-current.log`）；Core 自身 CI `42162313214` 全过。
+
+**边界**：巡检证明的是官方源脚本在当前 pin 上能装、能声明、能调用，不是站点本身可用；`mh18` 的 WAF 仍不给 clearance cookie，那是站点侧限制。
+
 ## 官方脚本巡检 34/34：`jm` 的失败是探针，不是引擎（2026-11-06）
 
 巡检里一直有一个失败：`jm.js` 加载时 `TypeError: Cannot read properties of null (reading 'length')`，此前记为「需要真实站点 `init` 响应」。这轮把它查到底：

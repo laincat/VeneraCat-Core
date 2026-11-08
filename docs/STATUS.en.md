@@ -13,6 +13,16 @@ English | [简体中文](STATUS.md)
 
 
 
+## How far the two client pins are behind Core main (2026-11-08)
+
+The client pin is still `d9a18516520b19f70ce9ff791cfeca408df8128e` while Core main is at `15187e9`. The seven commits in between are `904ca7f` (the moejs lazy-decode regression), `15187e9` (the register-ceiling compatibility regression), and `1645266`/`4f9fc41`/`283275a`/`3aaf55e`/`87651ec` (licence wording, the AGENTS rules and the dependency-upgrade record).
+
+The result of the check: those seven commits contain **not a single line of production code** - `git diff --name-only d9a1851..HEAD -- '*.go'` minus `_test.go` is **0 files**, and `go.mod`/`go.sum` are unchanged. All of them are tests and documentation. So **neither client pin needs to move**: the behaviour was already in the pin; what changed is the evidence for it.
+
+Evidence already run on the pin: the official-source sweep is **34 scripts / 0 failed** (`E:/Temp/core-sweep-current.log`); Core's own CI `42162313214` passed.
+
+**Boundaries**: the sweep proves that the official source scripts install, declare and call correctly on the current pin - not that the sites themselves work; `mh18`'s WAF still withholds the clearance cookie, which is a limit on the site side.
+
 ## Official-script sweep at 34/34: `jm`'s failure was the probe, not the engine (2026-11-06)
 
 The sweep always had one failure: loading `jm.js` gave `TypeError: Cannot read properties of null (reading 'length')`, previously recorded as "needs a live site `init` response". This round traced it to the end:
