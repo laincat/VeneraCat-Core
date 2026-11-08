@@ -13,6 +13,12 @@ English | [简体中文](STATUS.md)
 
 
 
+## Magpie local HTTP fixture re-verified on the current pin (2026-11-08)
+
+On a clean worktree of `d9a1851`, Nekularity's `scripts/fixtures/magpie-http/` fixture and a Go client made real loopback HTTP calls against the public `mobile.NewMagpieWithStream`: **7 PASS / 0 FAIL**. Covered: model catalogue, fake-credential refresh and rebuilt-instance persistence, first text before body completion, `ChatCancel` recorded by the server as `peer_closed`, targeted request release, the Unicode answer and the HTTP 503 error. Server events: `refresh` 1 / `request` 6 / `peer_closed` 1 / `expired` 0, with no credential or Cookie boundary violations. Log `E:/Temp/nk-magpie-current/core-http.log`; receipt `E:/Code/deliveries/2026-11-08-magpie-current-pin/receipt.json`.
+
+**Boundaries**: a Go client and a local server - not Swift URLSession, the iOS interface, the Keychain, or a real provider account.
+
 ## How far the two client pins are behind Core main (2026-11-08)
 
 The client pin is still `d9a18516520b19f70ce9ff791cfeca408df8128e` while Core main is at `15187e9`. The seven commits in between are `904ca7f` (the moejs lazy-decode regression), `15187e9` (the register-ceiling compatibility regression), and `1645266`/`4f9fc41`/`283275a`/`3aaf55e`/`87651ec` (licence wording, the AGENTS rules and the dependency-upgrade record).

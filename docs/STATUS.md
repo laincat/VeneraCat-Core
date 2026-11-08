@@ -13,6 +13,12 @@
 
 
 
+## 当前 pin 的 Magpie 本地 HTTP 夹具复验（2026-11-08）
+
+在 `d9a1851` 的干净 worktree 上，用 Nekularity 仓库的 `scripts/fixtures/magpie-http/` 夹具与 Go 客户端对公共 `mobile.NewMagpieWithStream` 发真实 loopback HTTP：**7 PASS / 0 FAIL**。覆盖模型目录、假凭据刷新与持久化重建、首段先于正文完成、`ChatCancel` 被服务端记为 `peer_closed`、指定请求 release、Unicode 回答与 HTTP 503 报错。服务端事件 `refresh` 1 / `request` 6 / `peer_closed` 1 / `expired` 0，凭据与 Cookie 边界零违规。日志 `E:/Temp/nk-magpie-current/core-http.log`，回执 `E:/Code/deliveries/2026-11-08-magpie-current-pin/receipt.json`。
+
+**边界**：Go 客户端 + 本机服务，不是 Swift URLSession、iOS 界面、钥匙串或真实供应商账号。
+
 ## 两端 pin 与 main 的差距核对（2026-11-08）
 
 客户端 pin 仍是 `d9a18516520b19f70ce9ff791cfeca408df8128e`，Core main 已到 `15187e9`，中间 7 个提交：`904ca7f`（moejs 延迟解码回归）、`15187e9`（register 上限兼容回归）、`1645266`/`4f9fc41`/`283275a`/`3aaf55e`/`87651ec`（许可证措辞、AGENTS 规则、依赖升级记录）。
