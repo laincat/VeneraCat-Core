@@ -820,6 +820,34 @@
   // only use these; a non-special scheme keeps its host as written.
   const SPECIAL_SCHEMES = ['http:', 'https:', 'ws:', 'wss:', 'ftp:'];
 
+  // Removes `.` and `..` path segments the way the URL standard does for a
+  // special scheme. Without it `new URL('../img/1.jpg', page)` asked the server
+  // for the literal `/b/c/../img/1.jpg`, which a signed CDN link or a strict
+  // server refuses even when a browser would have fetched `/b/img/1.jpg`.
+  // `%2e` counts as a dot, as it does in the standard; `..` never climbs above
+  // the root; and a trailing `.` or `..` leaves the directory's slash behind.
+  function removeDotSegments(path) {
+    const input = path.split('/');
+    const output = [];
+    for (let i = 0; i < input.length; i++) {
+      const segment = input[i];
+      const lower = segment.toLowerCase();
+      const single = segment === '.' || lower === '%2e';
+      const double = segment === '..' || lower === '.%2e' || lower === '%2e.' || lower === '%2e%2e';
+      const last = i === input.length - 1;
+      if (double) {
+        if (output.length > 1) output.pop();
+        if (last) output.push('');
+      } else if (single) {
+        if (last) output.push('');
+      } else {
+        output.push(segment);
+      }
+    }
+    const joined = output.join('/');
+    return joined.startsWith('/') ? joined : '/' + joined;
+  }
+
   class URL {
     constructor(input, base) {
       const text = String(input);
@@ -854,6 +882,9 @@
       }
       this.port = hasPort ? hostport.slice(portAt + 1) : '';
       this.pathname = absolute[3] || '/';
+      if (SPECIAL_SCHEMES.indexOf(this.protocol) !== -1) {
+        this.pathname = removeDotSegments(this.pathname);
+      }
       this.searchParams = new URLSearchParams(absolute[4] || '');
       this.hash = absolute[5] === undefined ? '' : '#' + absolute[5];
     }

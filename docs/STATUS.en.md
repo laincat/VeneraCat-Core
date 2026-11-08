@@ -13,6 +13,14 @@ English | [简体中文](STATUS.md)
 
 
 
+## `new URL` resolves `.`/`..` path segments (2026-11-08)
+
+A differential against Node v26.12.1's WHATWG URL: of 53 built-ins the official sources actually use (`replaceAll`, `matchAll`, BigInt, lookbehind, named groups, private fields, `Date.parse` formats and more), **52 agree**. The one difference was `new URL('../img/1.jpg', 'https://a.com/b/c/d.html')`: Core returned the literal `/b/c/../img/1.jpg` where a browser gives `/b/img/1.jpg`, and a literal `..` is refused by signed CDN paths and strict servers. A further 20 URL path cases disagreed on 15 before the fix.
+
+Fix: for special schemes (http/https/ws/wss/ftp) the pathname drops dot segments as the standard does (`%2e` counts as a dot, `..` never climbs above the root, a trailing `.`/`..` keeps the directory slash). After it the URL cases agree on 18/20 and the built-ins on 53/53. The remaining two are deliberate and pinned by a test: `href` rebuilds the query from searchParams so `/` becomes `%2F` (the server receives the same parameter), and non-special schemes keep their path as written.
+
+`go test -run TestURLResolvesDotSegments`: FAIL before the fix (`got ".../b/c/../img/1.jpg"`), PASS after; `go test ./...` passes all 23 packages; the official-source load sweep is **34/34**. Evidence `E:/Code/deliveries/2026-11-08-core-url-dot-segments/`.
+
 ## Magpie local HTTP fixture re-verified on the current pin (2026-11-08)
 
 On a clean worktree of `d9a1851`, Nekularity's `scripts/fixtures/magpie-http/` fixture and a Go client made real loopback HTTP calls against the public `mobile.NewMagpieWithStream`: **7 PASS / 0 FAIL**. Covered: model catalogue, fake-credential refresh and rebuilt-instance persistence, first text before body completion, `ChatCancel` recorded by the server as `peer_closed`, targeted request release, the Unicode answer and the HTTP 503 error. Server events: `refresh` 1 / `request` 6 / `peer_closed` 1 / `expired` 0, with no credential or Cookie boundary violations. Log `E:/Temp/nk-magpie-current/core-http.log`; receipt `E:/Code/deliveries/2026-11-08-magpie-current-pin/receipt.json`.

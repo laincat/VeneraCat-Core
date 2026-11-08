@@ -13,6 +13,14 @@
 
 
 
+## `new URL` 解析 `.`/`..` 路径段（2026-11-08）
+
+用 Node v26.12.1 的 WHATWG URL 做差分：53 条官方源实际用到的内建（`replaceAll`、`matchAll`、BigInt、后行断言、命名分组、私有字段、`Date.parse` 各格式等）**52 条一致**，唯一差异是 `new URL('../img/1.jpg', 'https://a.com/b/c/d.html')`——Core 原样返回 `/b/c/../img/1.jpg`，浏览器为 `/b/img/1.jpg`。字面 `..` 会被签名 CDN 或严格服务器拒绝。再测 20 条 URL 路径用例，修复前 15 条不一致。
+
+修复：特殊 scheme（http/https/ws/wss/ftp）的 pathname 按标准移除点段（`%2e` 视为点、不越过根、末尾 `.`/`..` 保留目录斜杠）。修复后 URL 用例 18/20 一致、内建 53/53 一致；剩余 2 条为有意保留并由测试锁定：`href` 从 searchParams 重建查询使 `/` 变 `%2F`（服务器收到的参数相同），非特殊 scheme 保持原样。
+
+`go test -run TestURLResolvesDotSegments`：修复前 FAIL（`got ".../b/c/../img/1.jpg"`），修复后 PASS；`go test ./...` 23 包 PASS；官方源加载巡检 **34/34**。证据 `E:/Code/deliveries/2026-11-08-core-url-dot-segments/`。
+
 ## 当前 pin 的 Magpie 本地 HTTP 夹具复验（2026-11-08）
 
 在 `d9a1851` 的干净 worktree 上，用 Nekularity 仓库的 `scripts/fixtures/magpie-http/` 夹具与 Go 客户端对公共 `mobile.NewMagpieWithStream` 发真实 loopback HTTP：**7 PASS / 0 FAIL**。覆盖模型目录、假凭据刷新与持久化重建、首段先于正文完成、`ChatCancel` 被服务端记为 `peer_closed`、指定请求 release、Unicode 回答与 HTTP 503 报错。服务端事件 `refresh` 1 / `request` 6 / `peer_closed` 1 / `expired` 0，凭据与 Cookie 边界零违规。日志 `E:/Temp/nk-magpie-current/core-http.log`，回执 `E:/Code/deliveries/2026-11-08-magpie-current-pin/receipt.json`。
