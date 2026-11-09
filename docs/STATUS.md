@@ -17,7 +17,7 @@
 
 上一轮把 URL 的绝对形式对齐了 WHATWG，这一轮用第三批 41 条差分补它的另一半——**带 base 的相对地址**，以及源脚本把查询串当表单遍历的路径。修复前 29/41 一致，12 处真实缺口：
 
-- **协议相对地址被当成路径**：`new URL('//cdn.example/x.jpg', 'https://a.com/b/c')` 得到 `https://a.com//cdn.example/x.jpg`，浏览器是 `https://cdn.example/x.jpg`。这是源脚本写图片主机最常见的形式，错误的地址会直接请求到页面所在的站。
+- **协议相对地址被当成路径**：`new URL('//cdn.example/x.jpg', 'https://a.com/b/c')` 得到 `https://a.com//cdn.example/x.jpg`，浏览器是 `https://cdn.example/x.jpg`。写这种形式的源脚本会把请求打到页面所在的站。需要说清的是：仓库里 34 份官方源都没有这样用（只有 `manhuaren.js` 调用 `new URL`，且传绝对地址），所以这一条是**契约缺口**，不是当前某个源正在踩的坑。
 - **只有查询或片段的引用丢了路径**：`?x=1` 得到 `https://a.com/b/?x=1`（应为 `…/b/c?x=1`），`#f` 得到 `https://a.com/b/#f`（应为 `…/b/c?y=2#f`），空串得到 `https://a.com/b/`（应为原地址去掉片段）。
 - **`URLSearchParams` 不可迭代**：`[...params]`、`for (const [k, v] of params)` 都抛 `TypeError: [object Object] is not iterable`；`entries()` / `keys()` / `values()` 不存在。把查询串当表单遍历的源脚本因此中断。
 - **复制参数对象复制成了字段**：`new URLSearchParams(other)` 得到 `_pairs=a%2C1&_onEdit=null`，把实现细节当成参数名。
