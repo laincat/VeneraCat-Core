@@ -776,6 +776,11 @@
       if (init == null) return;
       if (typeof init === 'string') {
         this._pairs = searchParamsOf(init.replace(/^\?/, ''));
+      } else if (init instanceof URLSearchParams) {
+        // Copying another parameter list has to copy its pairs, not its own
+        // fields: enumerating the object handed back `_pairs` and `_onEdit`
+        // as two parameters named after the implementation.
+        this._pairs = init._pairs.map(pair => [pair[0], pair[1]]);
       } else if (Array.isArray(init)) {
         for (const pair of init) this._pairs.push([String(pair[0]), String(pair[1])]);
       } else if (typeof init === 'object') {
@@ -833,6 +838,26 @@
 
     forEach(fn, thisArg) {
       for (const [key, value] of this._pairs) fn.call(thisArg, value, key, this);
+    }
+
+    // The parameter list is iterable as [name, value] pairs, and the three
+    // views are what a source walks when it turns a query into a form. Without
+    // them `for (const [k, v] of params)` threw `not iterable`, which a source
+    // sees as an engine fault rather than a missing method.
+    *entries() {
+      for (const pair of this._pairs) yield [pair[0], pair[1]];
+    }
+
+    *keys() {
+      for (const pair of this._pairs) yield pair[0];
+    }
+
+    *values() {
+      for (const pair of this._pairs) yield pair[1];
+    }
+
+    [Symbol.iterator]() {
+      return this.entries();
     }
 
     toString() {
@@ -913,17 +938,52 @@
     return joined.startsWith('/') ? joined : '/' + joined;
   }
 
+  // Resolves a relative reference against a base address, as a string the
+  // constructor can parse again. The shapes a source actually writes are a
+  // protocol-relative address (`//cdn.example/host`), a bare query, a bare
+  // fragment and an empty reference; each keeps a different part of the base.
+  function resolveReference(reference, base) {
+    const ref = String(reference);
+    // What precedes the path: the scheme and, when the address has one, the
+    // host with any credentials.
+    const prefix = base._hasHost
+      ? base.protocol + '//'
+        + (base.username
+          ? base.username + (base.password ? ':' + base.password : '') + '@'
+          : '')
+        + base.host
+      : base.protocol;
+    const withoutHash = prefix + base.pathname + base.search;
+
+    // A fragment-only reference keeps the query, and an empty one keeps the
+    // whole address but the fragment.
+    if (ref === '' || ref.startsWith('#')) return withoutHash + ref;
+
+    // An opaque path has no directories to merge with: only a fragment can be
+    // added to it, and the standard refuses the rest with a TypeError.
+    if (base._opaquePath) throw new TypeError('Invalid URL: ' + ref);
+
+    // A reference that starts with a query replaces the query and keeps the
+    // path; a protocol-relative and an absolute one carry their own address.
+    if (ref.startsWith('?')) return prefix + base.pathname + ref;
+    if (ref.startsWith('//')) return base.protocol + ref;
+    if (ref.startsWith('/')) return prefix + ref;
+
+    // A relative path merges with the directory of the base path. A base path
+    // that ends in a slash is already a directory; a base address with no
+    // path merges against the root.
+    const path = base.pathname || '/';
+    const directory = path.endsWith('/') ? path : path.replace(/[^/]*$/, '');
+    return prefix + directory + ref;
+  }
+
   class URL {
     constructor(input, base) {
       const text = String(input);
       const absolute = URL_PATTERN.exec(text);
       if (!absolute) {
         if (base === undefined) throw new TypeError('Invalid URL: ' + text);
-        const resolved = new URL(String(base), undefined);
-        const joined = text.startsWith('/')
-          ? resolved.protocol + '//' + resolved.host + text
-          : resolved.protocol + '//' + resolved.host + resolved.pathname.replace(/[^/]*$/, '') + text;
-        return new URL(joined, undefined);
+        return new URL(resolveReference(text, new URL(String(base), undefined)), undefined);
       }
       this.protocol = absolute[1].toLowerCase();
       const special = SPECIAL_SCHEMES.indexOf(this.protocol) !== -1;
@@ -995,6 +1055,7 @@
       if (!opaque) {
         this.pathname = removeDotSegments(this.pathname);
       }
+      this._opaquePath = opaque;
       // The query is kept exactly as written. A signed URL's `?sig=a/b` is a
       // different request from `?sig=a%2Fb`, and pre-escaped bytes such as
       // `%2f` must not be decoded and re-encoded. Only an edit through
@@ -1081,6 +1142,12 @@
 
   URL.canParse = function (input, base) {
     try { new URL(input, base); return true; } catch (_) { return false; }
+  };
+
+  // The non-throwing form: an address the standard rejects answers null rather
+  // than an exception a source has to wrap in try/catch.
+  URL.parse = function (input, base) {
+    try { return new URL(input, base); } catch (_) { return null; }
   };
 
   // ---------------------------------------------------------------------

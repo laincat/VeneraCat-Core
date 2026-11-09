@@ -13,6 +13,22 @@ English | [简体中文](STATUS.md)
 
 
 
+## `new URL`: relative references, parameter iteration and `URL.parse` (2026-11-09)
+
+The previous round aligned the absolute form of the URL with WHATWG; this one covers its other half with a third batch of 41 cases — **relative references against a base**, and the paths a source walks when it turns a query into a form. Before the fix 29/41 agreed, with 12 real gaps:
+
+- **A protocol-relative address was treated as a path**: `new URL('//cdn.example/x.jpg', 'https://a.com/b/c')` gave `https://a.com//cdn.example/x.jpg`; the browser gives `https://cdn.example/x.jpg`. This is the most common way a source names an image host, and the wrong address requests the page's own site.
+- **A query-only or fragment-only reference lost the path**: `?x=1` gave `https://a.com/b/?x=1` (should be `…/b/c?x=1`), `#f` gave `https://a.com/b/#f` (should be `…/b/c?y=2#f`), and the empty string gave `https://a.com/b/` (should be the base without its fragment).
+- **`URLSearchParams` was not iterable**: `[...params]` and `for (const [k, v] of params)` both threw `TypeError: [object Object] is not iterable`, and `entries()` / `keys()` / `values()` did not exist. A source walking a query as a form stopped there.
+- **Copying a parameter object copied its fields**: `new URLSearchParams(other)` produced `_pairs=a%2C1&_onEdit=null`, turning implementation details into parameter names.
+- **`URL.parse` was missing**: a source that wanted to test an address without an exception read `undefined`.
+
+The fix (`comic/js/init.js`): a new `resolveReference` splits a relative reference into the six shapes the standard names — fragment-only, query-only, empty, protocol-relative, absolute path and relative path — and keeps the matching part of the base; an opaque path (`mailto:`, `data:`) accepts only a fragment and throws `TypeError` otherwise; `URLSearchParams` gained `entries` / `keys` / `values` / `[Symbol.iterator]`, and its copy constructor copies pairs rather than fields; `URL.parse` was added (an object on success, `null` on failure).
+
+Verification: the third batch is **41/41 with Node v26.12.1** and the earlier batches do not regress (the first wave's 4 remaining cases are the recorded "not URL behaviour" ones, the second wave is 59/59). New tests `TestURLResolvesRelativeReferencesLikeTheStandard`, `TestURLSearchParamsIsIterable` and `TestURLParseAnswersNullInsteadOfThrowing`; the mutation check **caught 9/9** (undoing the protocol-relative case, the query, the fragment, the empty reference, the opaque refusal, `entries`, the iterator, the copy constructor and `URL.parse`). `go test ./...` passes all 23 packages and the official-source sweep is **34/34**. Evidence `E:/Code/deliveries/2026-11-09-core-url-relative/`.
+
+**This changes production `init.js` behaviour, so both client pins have to follow.**
+
 ## `new URL`: default port, path encoding, backslashes and schemes without a host (2026-11-09)
 
 The previous round recorded "a scheme that is not special keeps its own dot segments" as a deliberate difference. A fresh differential against Node v26.12.1's WHATWG URL — 177 cases in two batches (118 + 59) — shows several of them are real gaps rather than differences:

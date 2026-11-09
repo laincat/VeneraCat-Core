@@ -13,6 +13,22 @@
 
 
 
+## `new URL`：相对地址、参数迭代与 `URL.parse`（2026-11-09）
+
+上一轮把 URL 的绝对形式对齐了 WHATWG，这一轮用第三批 41 条差分补它的另一半——**带 base 的相对地址**，以及源脚本把查询串当表单遍历的路径。修复前 29/41 一致，12 处真实缺口：
+
+- **协议相对地址被当成路径**：`new URL('//cdn.example/x.jpg', 'https://a.com/b/c')` 得到 `https://a.com//cdn.example/x.jpg`，浏览器是 `https://cdn.example/x.jpg`。这是源脚本写图片主机最常见的形式，错误的地址会直接请求到页面所在的站。
+- **只有查询或片段的引用丢了路径**：`?x=1` 得到 `https://a.com/b/?x=1`（应为 `…/b/c?x=1`），`#f` 得到 `https://a.com/b/#f`（应为 `…/b/c?y=2#f`），空串得到 `https://a.com/b/`（应为原地址去掉片段）。
+- **`URLSearchParams` 不可迭代**：`[...params]`、`for (const [k, v] of params)` 都抛 `TypeError: [object Object] is not iterable`；`entries()` / `keys()` / `values()` 不存在。把查询串当表单遍历的源脚本因此中断。
+- **复制参数对象复制成了字段**：`new URLSearchParams(other)` 得到 `_pairs=a%2C1&_onEdit=null`，把实现细节当成参数名。
+- **`URL.parse` 缺失**：想不抛异常地试一个地址的源脚本读到 `undefined`。
+
+修复（`comic/js/init.js`）：新增 `resolveReference`，按标准把相对引用分成「只有片段 / 只有查询 / 空串 / 协议相对 / 绝对路径 / 相对路径」六种形状，分别保留 base 的相应部分；opaque path（`mailto:`、`data:`）只接受片段，其余抛 `TypeError`；`URLSearchParams` 增加 `entries` / `keys` / `values` / `[Symbol.iterator]`，复制构造拷贝参数对而不是字段；新增 `URL.parse`（成功返回对象、失败返回 `null`）。
+
+验证：第三批差分 **41/41 与 Node v26.12.1 一致**，前两批无回归（第一波 114/118 的 4 条仍是已记录的「非 URL 行为」，第二波 59/59）。新增 `TestURLResolvesRelativeReferencesLikeTheStandard`、`TestURLSearchParamsIsIterable`、`TestURLParseAnswersNullInsteadOfThrowing`；变异检验 **9/9 全部被捕获**（分别还原协议相对、查询、片段、空串、opaque 拒绝、`entries`、迭代器、复制构造、`URL.parse`）。`go test ./...` 23 包 PASS，官方源巡检 **34/34**。证据 `E:/Code/deliveries/2026-11-09-core-url-relative/`。
+
+**这是生产 `init.js` 行为变更，两端 pin 需跟进。**
+
 ## `new URL`：默认端口、路径编码、反斜杠与无主机 scheme（2026-11-09）
 
 上一轮把「非特殊 scheme 保留自己的点段」记为有意差异，这次用 Node v26.12.1 的 WHATWG URL 做参照重新做 177 条差分（两批：118 + 59），证明其中多条是真实缺口而非差异：

@@ -347,3 +347,97 @@ func TestURLSearchAndSearchParamsAgree(t *testing.T) {
 		}
 	}
 }
+
+// A relative reference keeps a different part of the base depending on its
+// shape. `//cdn.example/x.jpg` is the one a source writes most often — an
+// image host without a scheme — and it used to be appended to the page path,
+// producing an address on the wrong host.
+func TestURLResolvesRelativeReferencesLikeTheStandard(t *testing.T) {
+	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	cases := []struct{ script, want string }{
+		{`new URL("//cdn.example/x.jpg", "https://a.com/b/c").href`, `"https://cdn.example/x.jpg"`},
+		{`new URL("//cdn.example", "https://a.com/b/c").href`, `"https://cdn.example/"`},
+		{`new URL("?x=1", "https://a.com/b/c?y=2").href`, `"https://a.com/b/c?x=1"`},
+		{`new URL("#f", "https://a.com/b/c?y=2").href`, `"https://a.com/b/c?y=2#f"`},
+		{`new URL("", "https://a.com/b/c?y=2").href`, `"https://a.com/b/c?y=2"`},
+		{`new URL("?", "https://a.com/b/c?y=2").href`, `"https://a.com/b/c?"`},
+		{`new URL("#", "https://a.com/b/c?y=2").href`, `"https://a.com/b/c?y=2#"`},
+		{`new URL("?x=1", "https://a.com/b/c?y=2#f").href`, `"https://a.com/b/c?x=1"`},
+		{`new URL("#g", "https://a.com/b/c?y=2#f").href`, `"https://a.com/b/c?y=2#g"`},
+		{`new URL("x", "https://a.com").href`, `"https://a.com/x"`},
+		{`new URL("x", "https://a.com/b/c/").href`, `"https://a.com/b/c/x"`},
+		{`new URL("../x", "https://a.com/b/c/").href`, `"https://a.com/b/x"`},
+		{`new URL("x", "https://u:p@a.com/b/c").href`, `"https://u:p@a.com/b/x"`},
+		{`new URL("//h/p", "https://a.com:8443/b/c").href`, `"https://h/p"`},
+		{`new URL("x", "foo://h/a/b").href`, `"foo://h/a/x"`},
+		{`new URL("/x", "https://a.com/b/c?y=2#f").href`, `"https://a.com/x"`},
+		// An opaque path has no directories to merge with; only a fragment
+		// can be added, and the rest is refused.
+		{`new URL("#f", "mailto:a@b").href`, `"mailto:a@b#f"`},
+		{`(() => { try { new URL("x", "mailto:a@b"); return "no throw" } catch (e) { return e.constructor.name } })()`, `"TypeError"`},
+		{`(() => { try { new URL("?q", "mailto:a@b"); return "no throw" } catch (e) { return e.constructor.name } })()`, `"TypeError"`},
+	}
+	for _, c := range cases {
+		got, err := r.Eval(ctx, c.script)
+		if err != nil || string(got) != c.want {
+			t.Fatalf("%s: got %s, want %s, err %v", c.script, got, c.want, err)
+		}
+	}
+}
+
+// A query turned into a form is walked as [name, value] pairs. The parameter
+// list used to have no iterator at all, so `for (const [k, v] of params)` threw
+// `not iterable` and a source read that as an engine fault.
+func TestURLSearchParamsIsIterable(t *testing.T) {
+	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	cases := []struct{ script, want string }{
+		{`JSON.stringify([...new URLSearchParams("a=1&b=2")])`, `"[[\"a\",\"1\"],[\"b\",\"2\"]]"`},
+		{`JSON.stringify([...new URLSearchParams("a=1&b=2").entries()])`, `"[[\"a\",\"1\"],[\"b\",\"2\"]]"`},
+		{`JSON.stringify([...new URLSearchParams("a=1&b=2").keys()])`, `"[\"a\",\"b\"]"`},
+		{`JSON.stringify([...new URLSearchParams("a=1&b=2").values()])`, `"[\"1\",\"2\"]"`},
+		{`(() => { const out = []; for (const [k, v] of new URLSearchParams("a=1&b=2")) out.push(k + v); return out.join(",") })()`, `"a1,b2"`},
+		// Copying another parameter list copies its pairs, not its fields.
+		{`(() => { const a = new URLSearchParams("a=1&b=2"); return new URLSearchParams(a).toString() })()`, `"a=1&b=2"`},
+	}
+	for _, c := range cases {
+		got, err := r.Eval(ctx, c.script)
+		if err != nil || string(got) != c.want {
+			t.Fatalf("%s: got %s, want %s, err %v", c.script, got, c.want, err)
+		}
+	}
+}
+
+// The non-throwing parse form: a source that wants to test an address without
+// a try/catch reads null.
+func TestURLParseAnswersNullInsteadOfThrowing(t *testing.T) {
+	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	cases := []struct{ script, want string }{
+		{`String(URL.parse("https://a.com/p").href)`, `"https://a.com/p"`},
+		{`String(URL.parse("not a url"))`, `"null"`},
+		{`String(URL.parse("/p", "https://a.com/x").href)`, `"https://a.com/p"`},
+	}
+	for _, c := range cases {
+		got, err := r.Eval(ctx, c.script)
+		if err != nil || string(got) != c.want {
+			t.Fatalf("%s: got %s, want %s, err %v", c.script, got, c.want, err)
+		}
+	}
+}
