@@ -5,20 +5,37 @@
 Updated 2026-11-01. Only the questions that need a product or security decision appear here, with
 what happens if they stay open. Work that is merely unfinished does not belong on this page.
 
+## Decisions taken (2026-11-09, multiple-choice answers)
+
+The user chose a direction for security, data, distribution and priorities. These are **decisions, not completion claims**:
+
+- **HTTPS by default**; whether http is permitted is decided by a rule or a source declaration — neither a blanket exception nor a blanket ban. `Nekularity/App/Info.plist` still has `NSAllowsArbitraryLoads=true`, which does **not** match this decision and is **still to be changed**; section 1 below describes the old configuration, not the current one.
+- Importing cookies from a `.venera` backup: confirm on every import, listing the source partitions that would be written. The current importer still takes a Boolean, **still to be changed**.
+- Tag translation: add a subscribable community glossary as an entry in the unified source collection, after checking its licence. The built-in table stays the offline default.
+- AI colourisation comes later; afterwards users may install models with non-commercial licences (such as MangaNinjia, CC BY-NC) with a visible warning.
+- Desktop is **portable only** for now and unsigned: data, user files and plugins all live in named subfolders of the program folder, whose top level stays clean. Nekophage now uses `data/` `cache/` `logs/` `webview/`; see `E:/Code/deliveries/2026-11-09-nekophage-portable/`.
+- iOS wants both routes (sideloading and the App Store); AltStore / SideStore comes first, and the LGPL exception's legal review is deferred until before a formal App Store submission.
+- Core **keeps commit-hash pins**, no version tags; both clients stay fixed through `scripts/core-version`.
+- After dependency upgrades: TMDB/Bangumi service plugins, AI colourisation and Core compatibility hardening are allowed; **no UI rewrite**.
+- The user can provide a Dynamic Island iPhone, an iPad, a Mac session, Bangumi/TMDB credentials, Jellyfin/Emby/Plex, AI provider accounts and comic-site accounts; **no foldable device**, so real narrow/wide layout findings stay separate.
+- The old Orca Worker `mac-validate-2` has been archived and is not dispatched again.
+
 ## 1. ATS policy on iOS
 
-**Now**: the client configures **nothing** for ATS — `project.yml` sets `GENERATE_INFOPLIST_FILE: YES`
-and no `NSAppTransportSecurity` key — so the system default applies: HTTPS only, plus the few
-exceptions iOS ships. No site was blocked in the real-source runs **because every verified source
-uses https**; that is not evidence that an http source works, and today it would fail with an ATS
-message from the system rather than anything the app can explain.
+**Now (checked 2026-11-09)**: `Nekularity/App/Info.plist` contains
+`NSAllowsArbitraryLoads=true`, a **blanket exception for http**. The "no ATS
+configuration" description below is historical. No site was blocked in the
+real-source runs **because every verified source uses https**; that is not
+evidence that an http source works. **Decision**: HTTPS by default, with http
+permitted only when a rule or a source declares it. The blanket exception does
+not match that decision and is **still to be changed**.
 
 **Why you**: `NSAllowsArbitraryLoads` is the easy switch and it removes the system's floor from
 *every* request the app makes, including the conversation with an AI provider. Per-host exceptions
 keep that floor but need a release whenever a new source appears.
 
 **Options**: A. allow everything; B. exceptions for a maintained list of comic hosts; C. keep the
-current state and evaluate when something is actually blocked. **If it stays open**: a user meets an
+current state and evaluate when something is actually blocked. **If it had stayed open**: a user meets an
 http source and what they see is "no images", not a sentence they can act on.
 
 ## 2. Migrating cookies from a global jar into per-source partitions
@@ -45,19 +62,22 @@ client writes them; no shared jar is rebuilt.
 - Three kinds of row are dropped: no name, no value, and a domain that is not a host (including
   junk such as `https://` written into the column).
 
-**Still open is only this**: whether an import *ticks* cookies by default. Core's default selection
-still leaves them out because they are sensitive; making the client default to on is a product call.
+**Decided (2026-11-09)**: every import asks for confirmation and lists the source partitions it
+would write to; there is neither a default tick nor a silent restore. The client still takes a
+Boolean today, so this is **still to be implemented**.
 
 ## 3. Video playback architecture (Windows/Linux)
 
-**Now**: Core parses video sources and HLS; the desktop only wired the reader, and
-`browser.Sniffer` returns "unsupported" on purpose.
+**Now (historical)**: Core parses video sources and HLS; the desktop only wired the reader, and
+`browser.Sniffer` returned "unsupported" on purpose. **Current implementation**: the desktop uses
+WebView + hls.js + a media proxy, with fixture evidence for HLS, Range, Referer/Cookie, subtitles
+and resume; DRM and DASH are still explicitly unsupported.
 
 **Why you**: playback is either a WebView (the same machinery as the reader, with its limits) or a
 native player per platform (double the work, different codec and DRM problems on each).
 
 **Options**: A. WebView plus `<video>`; B. a native player per platform; C. only sniff a direct URL
-and hand it to the system player. **If it stays open**: video sources install and search, and
+and hand it to the system player. **If it had stayed open**: video sources install and search, and
 tapping one does nothing.
 
 ## 4. Where provider packages come from
@@ -76,6 +96,10 @@ third-party package themselves.
 
 ## 6. What `enableTagsTranslate` means
 
+**Decided (2026-11-09)**: option C — a subscribable community glossary as an entry in the unified
+source collection, after a licence check; the built-in table stays the offline default. **Still to
+be implemented.**
+
 **Where it stands**: four sources declare `enableTagsTranslate: true` (`ehentai`, `hitomi`, `lanraragi`, `nhentai`) and several declare `false`. **No client has ever read the field**, so tags are shown exactly as the source writes them. Nothing in this repository defines its semantics: the source scripts do not explain it, and neither the Core docs nor `init.js` implement it.
 
 **Why it needs you**: at least two readings are defensible, with different costs —
@@ -93,7 +117,7 @@ tested in Core, and exercised with the **real Copilot package** against a fake s
 client, the sign-in UI, Keychain and transport pass the macOS type checks and unit tests.
 
 **What is missing**: one end-to-end run with a real account on a real device. That needs an account
-from you, or you tapping through it once. **If it stays open**: the honest claim is "implemented",
+from you, or you tapping through it once. **If it had stayed open**: the honest claim is "implemented",
 not "works"; and a community package's real behaviour — rate limits, second factors, regional
 restrictions — stays unknown.
 
