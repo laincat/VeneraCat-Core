@@ -796,6 +796,13 @@
       return this._pairs.some(([key]) => key === String(name));
     }
 
+    // The number of pairs. A source that checks whether a parameter exists
+    // with `size` would otherwise read `undefined` and treat the object as
+    // a non-empty one.
+    get size() {
+      return this._pairs.length;
+    }
+
     edited() {
       if (this._onEdit) this._onEdit();
     }
@@ -837,6 +844,46 @@
   // The schemes whose host is case-insensitive in the URL standard. Sources
   // only use these; a non-special scheme keeps its host as written.
   const SPECIAL_SCHEMES = ['http:', 'https:', 'ws:', 'wss:', 'ftp:'];
+  // The port a special scheme leaves out of the address. The standard drops it
+  // from `port` and from `href`, so `new URL('https://a.com:443/p').port` is
+  // empty and the address is `https://a.com/p`. A source that compares the
+  // address it built with the one the server sees would otherwise see a port
+  // the request never carries.
+  const DEFAULT_PORTS = { 'http:': '80', 'https:': '443', 'ws:': '80', 'wss:': '443', 'ftp:': '21' };
+  // The characters a path percent-encodes. The query has its own set, and the
+  // fragment has none: a space in a path is `a%20b`, while `?` and `#` are the
+  // path's own separators and never reach it.
+  //
+  // Bytes that are already escaped stay as they are. `%2f` is a slash inside
+  // one path segment and must not become a separator, and `%41` is an `A` the
+  // source wrote down — re-encoding either changes the address the server
+  // receives. The path is therefore walked one character at a time: an
+  // escape is copied through, everything else is encoded by its own byte.
+  const PATH_UNRESERVED = /[A-Za-z0-9\-._~!$&'()*+,;=:@]/;
+  function encodePath(path) {
+    let out = '';
+    for (let i = 0; i < path.length; i++) {
+      const ch = path[i];
+      // An escape the source wrote down is kept exactly as it is.
+      if (ch === '%' && /^[0-9a-fA-F]{2}$/.test(path.slice(i + 1, i + 3))) {
+        out += path.slice(i, i + 3);
+        i += 2;
+        continue;
+      }
+      // A slash separates the segments and stays a slash.
+      if (ch === '/') {
+        out += ch;
+        continue;
+      }
+      if (PATH_UNRESERVED.test(ch)) {
+        out += ch;
+        continue;
+      }
+      // A character outside ASCII is encoded from its UTF-8 bytes.
+      out += encodeURIComponent(ch);
+    }
+    return out;
+  }
 
   // Removes `.` and `..` path segments the way the URL standard does for a
   // special scheme. Without it `new URL('../img/1.jpg', page)` asked the server
@@ -879,7 +926,31 @@
         return new URL(joined, undefined);
       }
       this.protocol = absolute[1].toLowerCase();
-      const authority = absolute[2] || '';
+      const special = SPECIAL_SCHEMES.indexOf(this.protocol) !== -1;
+      // A special scheme treats a backslash as a path separator everywhere,
+      // so `https:\\a.com\p` is the address `https://a.com/p` rather than a
+      // host of `\a.com`. The replacement reaches the authority and the path
+      // only: a backslash in a query or a fragment is part of the text and
+      // stays as it is.
+      //
+      // A single separator after the scheme is not enough to say "there is a
+      // host": the standard reads `https:/a.com` as a host of `a.com`, so the
+      // separator is doubled when the scheme is special and the address does
+      // not already carry two of them.
+      let raw = text;
+      if (special) {
+        const cut = raw.search(/[?#]/);
+        const head = cut === -1 ? raw : raw.slice(0, cut);
+        const tail = cut === -1 ? '' : raw.slice(cut);
+        raw = head.replace(/\\/g, '/') + tail;
+        raw = raw.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:)\/(?!\/)/, '$1//');
+      }
+      const parsed = URL_PATTERN.exec(raw);
+      if (!parsed) throw new TypeError('Invalid URL: ' + text);
+      const authority = parsed[2] || '';
+      // A scheme that writes an authority has a host; one that does not keeps
+      // its path as written, which is what `mailto:` and `data:` need.
+      this._hasHost = parsed[2] !== undefined;
       const at = authority.lastIndexOf('@');
       this.username = '';
       this.password = '';
@@ -895,12 +966,33 @@
       // Addresses with a special scheme parse their host case-insensitively:
       // a source comparing `new URL(imageUrl).host` against "example.test" must
       // not fail on an uppercase link. Other schemes keep the host opaque.
-      if (SPECIAL_SCHEMES.indexOf(this.protocol) !== -1) {
+      if (special) {
         this.hostname = this.hostname.toLowerCase();
       }
-      this.port = hasPort ? hostport.slice(portAt + 1) : '';
-      this.pathname = absolute[3] || '/';
-      if (SPECIAL_SCHEMES.indexOf(this.protocol) !== -1) {
+      // The port a special scheme leaves out of the address is dropped, so
+      // `new URL('https://a.com:443/p').port` is empty and the address reads
+      // `https://a.com/p`. The request never carries that port, and a source
+      // that rebuilds the address from `port` would otherwise send `:443` to
+      // a host that did not ask for it. A scheme that is not special keeps
+      // its port as written.
+      const port = hasPort ? hostport.slice(portAt + 1) : '';
+      this.port = (special && port === DEFAULT_PORTS[this.protocol]) ? '' : port;
+      // A path is percent-encoded, and the tabs and newlines the standard
+      // removes are removed first. The bytes that are already escaped stay
+      // as they are: `%2e` is a dot to the dot-segment rule but a literal
+      // `%2e` to the address, and re-encoding it would change the request.
+      let path = parsed[3] || '/';
+      path = path.replace(/[\t\n\r]/g, '');
+      if (special) {
+        path = encodePath(path);
+      }
+      this.pathname = path;
+      // Dot segments are resolved for every scheme that has a host, and for
+      // the ones that write an absolute path. A scheme whose path is opaque
+      // — `mailto:` and `data:` — keeps it as written, because there the
+      // text is the message rather than a route.
+      const opaque = !special && authority === '' && !path.startsWith('/');
+      if (!opaque) {
         this.pathname = removeDotSegments(this.pathname);
       }
       // The query is kept exactly as written. A signed URL's `?sig=a/b` is a
@@ -908,13 +1000,13 @@
       // `%2f` must not be decoded and re-encoded. Only an edit through
       // searchParams replaces the string with its encoded form. `null` means
       // there was no `?` at all; `''` means a bare `?`.
-      this._query = absolute[4] === undefined ? null : absolute[4];
+      this._query = parsed[4] === undefined ? null : parsed[4];
       this._queryEdited = false;
-      this.searchParams = new URLSearchParams(absolute[4] || '');
+      this.searchParams = new URLSearchParams(parsed[4] || '');
       // `hash` is a getter below; `_hash` keeps the marker even for an empty
       // fragment, because `https://a.com/p#` is a different href from
       // `https://a.com/p` even though both report `hash === ''`.
-      this._hash = absolute[5] === undefined ? '' : '#' + absolute[5];
+      this._hash = parsed[5] === undefined ? '' : '#' + parsed[5];
     }
 
     get searchParams() { return this._params; }
@@ -958,6 +1050,10 @@
     }
 
     get origin() {
+      // Only a special scheme has an origin. `foo://a.com` and `mailto:` do
+      // not, and the standard answers "null" for them rather than a string
+      // that looks like an address.
+      if (SPECIAL_SCHEMES.indexOf(this.protocol) === -1) return 'null';
       return this.protocol + '//' + this.host;
     }
 
@@ -968,8 +1064,15 @@
       const query = this._queryEdited
         ? (this._params.toString() ? '?' + this._params.toString() : '')
         : (this._query === null ? '' : '?' + this._query);
-      return this.protocol + '//' + credentials + this.host + this.pathname
-        + query + this._hash;
+      // The address is built the way the standard writes it: a scheme that
+      // has a host is followed by `//`, and one that does not is followed by
+      // its path straight away. `mailto:a@b` and `data:text/plain,x` keep
+      // their shape here — writing `mailto://a@b` would hand a source that
+      // reads `.href` an address the server never sees.
+      const prefix = this._hasHost
+        ? this.protocol + '//' + credentials + this.host
+        : this.protocol;
+      return prefix + this.pathname + query + this._hash;
     }
 
     toString() { return this.href; }

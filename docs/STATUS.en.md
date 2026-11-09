@@ -13,7 +13,25 @@ English | [简体中文](STATUS.md)
 
 
 
-## `new URL` keeps the raw query and the fragment marker (2026-11-08)
+## `new URL`: default port, path encoding, backslashes and schemes without a host (2026-11-09)
+
+The previous round recorded "a scheme that is not special keeps its own dot segments" as a deliberate difference. A fresh differential against Node v26.12.1's WHATWG URL — 177 cases in two batches (118 + 59) — shows several of them are real gaps rather than differences:
+
+- **The default port was not dropped**: `new URL('https://a.com:443/p').port` is `443` and the href is `https://a.com:443/p`. The browser gives an empty port and `https://a.com/p`. The request never carries that port, and a source that rebuilds the address from `port` would send an extra `:443`.
+- **The path was not percent-encoded**: `new URL('https://a.com/a b').pathname` is `/a b`; the browser gives `/a%20b`. A space and non-ASCII characters go into the request as they are.
+- **A backslash was not a separator**: `new URL('https:\\a.com\\p')` in Core is `https:///a.com/p` and in the browser `https://a.com/p` — the host became `\a.com`.
+- **`href` forced `//` onto a scheme without a host**: `new URL('mailto:a@b').href` was `mailto://a@b`, `data:text/plain,x` became `data://text/plain,x` and `urn:isbn:1` became `urn://isbn:1`. A source that reads `.href` got an address no server recognises.
+- **Dot segments were resolved for a special scheme only**: `new URL('foo:/a/../b').pathname` was `/a/../b`; the browser gives `/b`.
+- **`searchParams.size` was missing**: a source checking whether a query holds anything with `size` read `undefined`.
+- **The `origin` of a scheme that is not special** answered `foo://host`; the browser answers `null`.
+
+The fix (`comic/js/init.js`): the default port of a special scheme is dropped from `port` and from the href; the path is encoded character by character with the standard's path percent-encode set (an escape the source wrote, `%2f` or `%41`, stays as it is and is not encoded twice); for a special scheme a backslash is a separator inside the authority and the path, while a backslash in a query or a fragment stays as it is; the address records whether it has a host, and `href` writes `//` only then; dot segments are resolved for every path that has a host or begins with `/`, and only an opaque path (`mailto:`, `data:`, `foo:a/b`) keeps its text; `URLSearchParams` gained `size`; `origin` answers `null` for a scheme that is not special.
+
+Verification: the two batches total **177 cases**, and **173/177 agree with Node** after the fix (first wave 114/118, second wave 59/59). The four that remain are not URL behaviour: one case puts `'use strict'` inside a function body (Node's ESM top level is strict already, and Core's strict-mode semantics were verified separately), one is the browser-only `DOMException` type name, one is the recorded GBK `TextDecoder` limit and one is a wording difference in a TypeError message. The existing `TestURLKnownDifferencesFromTheBrowser`, which pinned "a scheme that is not special keeps its dot segments", recorded a wrong conclusion; it now pins the real remaining difference (the opaque path) and five new URL tests were added. The mutation check **caught 7/7** (undoing the default port, the path encoding, the backslash, `_hasHost`, the dot-segment range, `size` and `origin` in turn), and passed after restoring the fix. `go test ./...` passes all 23 packages and the official-source sweep is **34/34**. Evidence `E:/Code/deliveries/2026-11-09-core-url-whatwg/`.
+
+**This changes production `init.js` behaviour, so both clients' pins have to follow.**
+
+## `new URL` keeps the raw query string and the fragment marker (2026-11-08)
 
 The previous round recorded "`href` rebuilds the query from searchParams" as a deliberate difference. That was wrong: it changes the bytes of a signed URL. A 23-case minimal reproduction against Node v26.12.1's WHATWG URL agreed on only 12 cases before the fix and exposed 11 differences:
 

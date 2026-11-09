@@ -13,6 +13,24 @@
 
 
 
+## `new URL`：默认端口、路径编码、反斜杠与无主机 scheme（2026-11-09）
+
+上一轮把「非特殊 scheme 保留自己的点段」记为有意差异，这次用 Node v26.12.1 的 WHATWG URL 做参照重新做 177 条差分（两批：118 + 59），证明其中多条是真实缺口而非差异：
+
+- **默认端口没有去掉**：`new URL('https://a.com:443/p').port` 是 `443`，`href` 是 `https://a.com:443/p`。浏览器给的是空端口和 `https://a.com/p`。请求本身不带这个端口，而按 `port` 重建地址的源脚本会多带一个 `:443`。
+- **路径没有百分号编码**：`new URL('https://a.com/a b').pathname` 是 `/a b`，浏览器是 `/a%20b`。空格与非 ASCII 字符会直接进到请求里。
+- **反斜杠不是分隔符**：`new URL('https:\\a.com\\p')` 在 Core 里是 `https:///a.com/p`，浏览器是 `https://a.com/p`——主机整个变成了 `\a.com`。
+- **`href` 给无主机 scheme 硬拼 `//`**：`new URL('mailto:a@b').href` 是 `mailto://a@b`，`data:text/plain,x` 变成 `data://text/plain,x`，`urn:isbn:1` 变成 `urn://isbn:1`。读 `.href` 的源脚本会拿到服务器根本不认的地址。
+- **点段只对特殊 scheme 解析**：`new URL('foo:/a/../b').pathname` 是 `/a/../b`，浏览器是 `/b`。
+- **`searchParams.size` 缺失**：源脚本用 `size` 判断查询串是否非空时会读到 `undefined`。
+- **非特殊 scheme 的 `origin`** 返回 `foo://host`，浏览器返回 `null`。
+
+修复（`comic/js/init.js`）：特殊 scheme 的默认端口从 `port` 与 `href` 中去掉；路径按标准的 path percent-encode 集逐字符编码（已转义的 `%2f`、`%41` 原样保留，不再二次编码）；特殊 scheme 的反斜杠在 authority 与 path 范围内按分隔符处理（查询串与片段里的反斜杠保持原样）；记录地址是否带主机，`href` 据此决定是否写 `//`；点段对所有「有主机或以 `/` 开头的路径」解析，只有 opaque path（`mailto:`、`data:`、`foo:a/b`）保留原文；`URLSearchParams` 增加 `size`；`origin` 对非特殊 scheme 返回 `null`。
+
+验证：两批差分共 **177 条**，修复后 **173/177 与 Node 一致**（第一波 114/118、第二波 59/59）。剩余 4 条都不是 URL 行为：1 条用例把 `'use strict'` 写在函数体内（Node 的 ESM 顶层本就严格，Core 的严格模式语义已单独验证正确）、1 条是浏览器专有的 `DOMException` 类型名、1 条是已记录的 GBK `TextDecoder` 限制、1 条是 TypeError 文案措辞差异。既有 `TestURLKnownDifferencesFromTheBrowser` 锁定的「非特殊 scheme 保留点段」是错误结论，已改为锁定真正的剩余差异（opaque path）并新增五条 URL 测试。变异检验 **7/7 全部被捕获**（分别还原默认端口、路径编码、反斜杠、`_hasHost`、点段范围、`size`、`origin`），还原后 PASS。`go test ./...` 23 包 PASS，官方源巡检 **34/34**。证据 `E:/Code/deliveries/2026-11-09-core-url-whatwg/`。
+
+**这是生产 `init.js` 行为变更，两端 pin 需跟进。**
+
 ## `new URL` 保留原始查询串与片段标记（2026-11-08）
 
 上一轮把「`href` 从 searchParams 重建查询」记为有意保留的差异，这是错的：它改变签名 URL 的字节。以 Node v26.12.1 的 WHATWG URL 为参照做 23 条最小复现，修复前只有 12 条一致，暴露 11 处差异：

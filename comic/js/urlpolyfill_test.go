@@ -149,9 +149,10 @@ func TestURLHashKeepsItsMarker(t *testing.T) {
 	}
 }
 
-// One difference from the browser stays: a scheme sources do not use keeps its
-// path as written, including dot segments. Pinned so a change shows up here.
-func TestURLKnownDifferencesFromTheBrowser(t *testing.T) {
+// The path of a scheme that has no host and writes an absolute path is a
+// route, and the standard resolves its dot segments. `foo:/a/../b` is
+// therefore `/b`, the same as in a browser. Pinned so a change shows up here.
+func TestURLResolvesDotSegmentsForEveryRoutedScheme(t *testing.T) {
 	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +163,158 @@ func TestURLKnownDifferencesFromTheBrowser(t *testing.T) {
 	cases := []struct{ script, want string }{
 		{`new URL("https://a.com/a/../b?p=../q").href`, `"https://a.com/b?p=../q"`},
 		{`new URL("https://a.com/a/../b?p=../q").searchParams.get("p")`, `"../q"`},
-		{`new URL("foo:/a/../b").pathname`, `"/a/../b"`},
+		{`new URL("foo:/a/../b").pathname`, `"/b"`},
+		{`new URL("foo:/a/./b").pathname`, `"/a/b"`},
+		{`new URL("foo://host/a/../b").pathname`, `"/b"`},
+		{`new URL("file:/a/../b").pathname`, `"/b"`},
+	}
+	for _, c := range cases {
+		got, err := r.Eval(ctx, c.script)
+		if err != nil || string(got) != c.want {
+			t.Fatalf("%s: got %s, want %s, err %v", c.script, got, c.want, err)
+		}
+	}
+}
+
+// One difference from the browser stays: a scheme whose path is opaque keeps
+// it as written, because there the text is the message rather than a route.
+// `mailto:` and `data:` are the two a source actually meets.
+func TestURLKnownDifferencesFromTheBrowser(t *testing.T) {
+	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	cases := []struct{ script, want string }{
+		{`new URL("mailto:a/../b").pathname`, `"a/../b"`},
+		{`new URL("data:text/plain,../x").pathname`, `"text/plain,../x"`},
+		{`new URL("foo:a/../b").pathname`, `"a/../b"`},
+	}
+	for _, c := range cases {
+		got, err := r.Eval(ctx, c.script)
+		if err != nil || string(got) != c.want {
+			t.Fatalf("%s: got %s, want %s, err %v", c.script, got, c.want, err)
+		}
+	}
+}
+
+// The address a source reads back has to be the one it was given. `mailto:`
+// and `data:` have no host, and writing `mailto://a@b` would hand the source
+// an address no mail client would accept.
+func TestURLKeepsTheShapeOfASchemeWithoutAHost(t *testing.T) {
+	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	cases := []struct{ script, want string }{
+		{`new URL("mailto:a@b").href`, `"mailto:a@b"`},
+		{`new URL("data:text/plain,x").href`, `"data:text/plain,x"`},
+		{`new URL("foo:a/b").href`, `"foo:a/b"`},
+		{`new URL("urn:isbn:1").href`, `"urn:isbn:1"`},
+		{`new URL("foo:/a/b").href`, `"foo:/a/b"`},
+		{`new URL("foo://host/a/b").href`, `"foo://host/a/b"`},
+		{`new URL("https://a.com/p").href`, `"https://a.com/p"`},
+		// A scheme that is not special has no origin, and the standard
+		// answers "null" rather than a string that looks like an address.
+		{`new URL("foo://host/a").origin`, `"null"`},
+		{`new URL("mailto:a@b").origin`, `"null"`},
+		{`new URL("https://a.com/p").origin`, `"https://a.com"`},
+	}
+	for _, c := range cases {
+		got, err := r.Eval(ctx, c.script)
+		if err != nil || string(got) != c.want {
+			t.Fatalf("%s: got %s, want %s, err %v", c.script, got, c.want, err)
+		}
+	}
+}
+
+// The port a special scheme leaves out is dropped from the address, and the
+// path is percent-encoded. A source that rebuilds an address from these parts
+// would otherwise send a port the request never carried, or a path with a
+// raw space in it.
+func TestURLDropsTheDefaultPortAndEncodesThePath(t *testing.T) {
+	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	cases := []struct{ script, want string }{
+		{`new URL("https://a.com:443/p").port`, `""`},
+		{`new URL("https://a.com:443/p").href`, `"https://a.com/p"`},
+		{`new URL("http://a.com:80/p").href`, `"http://a.com/p"`},
+		{`new URL("ws://a.com:80/p").href`, `"ws://a.com/p"`},
+		{`new URL("wss://a.com:443/p").href`, `"wss://a.com/p"`},
+		{`new URL("ftp://a.com:21/p").href`, `"ftp://a.com/p"`},
+		{`new URL("https://a.com:8443/p").port`, `"8443"`},
+		{`new URL("https://a.com:8443/p").href`, `"https://a.com:8443/p"`},
+		// A scheme that is not special keeps its port as written.
+		{`new URL("foo://a.com:80/p").port`, `"80"`},
+		{`new URL("https://a.com/a b").pathname`, `"/a%20b"`},
+		{`new URL("https://a.com/a b").href`, `"https://a.com/a%20b"`},
+		{`new URL("https://a.com/中").pathname`, `"/%E4%B8%AD"`},
+		{`new URL("https://a.com/a%20b").pathname`, `"/a%20b"`},
+		{`new URL("https://a.com/a%2fb").pathname`, `"/a%2fb"`},
+		// An escape stays as it was written: `%41` is an `A` the source
+		// encoded, and re-encoding it would change the address.
+		{`new URL("https://a.com/a%41b").pathname`, `"/a%41b"`},
+	}
+	for _, c := range cases {
+		got, err := r.Eval(ctx, c.script)
+		if err != nil || string(got) != c.want {
+			t.Fatalf("%s: got %s, want %s, err %v", c.script, got, c.want, err)
+		}
+	}
+}
+
+// A special scheme reads a backslash as a path separator, so a link written
+// with Windows separators is the address it names and not a host of `\a.com`.
+func TestURLReadsABackslashAsASeparatorForSpecialSchemes(t *testing.T) {
+	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	cases := []struct{ script, want string }{
+		{`new URL("https:\\a.com\\p").href`, `"https://a.com/p"`},
+		{`new URL("https:\\a.com\\p").host`, `"a.com"`},
+		{`new URL("https://a.com/a\\b").pathname`, `"/a/b"`},
+		{`new URL("http:\\a.com/p").href`, `"http://a.com/p"`},
+		// A scheme that is not special keeps the backslash as it is.
+		{`new URL("foo://a.com/a\\b").pathname`, `"/a\\b"`},
+	}
+	for _, c := range cases {
+		got, err := r.Eval(ctx, c.script)
+		if err != nil || string(got) != c.want {
+			t.Fatalf("%s: got %s, want %s, err %v", c.script, got, c.want, err)
+		}
+	}
+}
+
+// The number of parameters. A source that asks whether a query has anything
+// in it with `size` would otherwise read `undefined` and take it for a
+// non-empty object.
+func TestURLSearchParamsHasASize(t *testing.T) {
+	r, err := New(Options{}, Services{Env: Environment{AppVersion: "1.6.3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	cases := []struct{ script, want string }{
+		{`new URL("https://a.com/p?a=1&b=2").searchParams.size`, `2`},
+		{`new URL("https://a.com/p").searchParams.size`, `0`},
+		{`new URL("https://a.com/p?").searchParams.size`, `0`},
+		{`(() => { const u = new URL("https://a.com/p?a=1&b=2"); u.searchParams.delete("a"); return u.searchParams.size })()`, `1`},
 	}
 	for _, c := range cases {
 		got, err := r.Eval(ctx, c.script)
