@@ -13,6 +13,16 @@
 
 
 
+## 依赖升级：moejs v0.1.0 与 sqlite v1.62.0（2026-11-09）
+
+moejs 从 `v0.1.0-alpha.11.0.20261103140239-df42231a9559` 升到 **v0.1.0**，`modernc.org/sqlite` 从 `v1.61.1` 升到 **v1.62.0**，Core pin 之后的 CI 为 `42726900043`：Ubuntu / Windows / macOS Go 与 Apple xcframework + Swift smoke **四个 job 全 success**。
+
+moejs v0.1.0 重写了解释器、正则与 base64 路径，并**解除了旧 alpha 的单函数 256 局部变量上限**：实测一个函数里 65,536 个局部变量仍可编译，300 个不再失败。因此把测试从「300 必须失败」改为 `TestCompatibilityLargeFunctionsCompile`，记录 200 / 300 / 4,096 都能编译；这是行为变化，不是测试放宽，下次引擎若倒退会直接表现为失败。
+
+**单次调用表达式**的 256 寄存器窗口仍然存在：254 个字面量实参保编译，255 个触发 `function needs more than 256 registers`，256 个触发 `too many arguments`。`explainEval` 的可操作提示因此保留，回归改为 `TestCompatibilityCallRegisterWindowExplainsItself`，用一个 255 实参调用验证提示与 `key`/`evaluate` 上下文。
+
+回归：`go test ./...` **23 包 PASS**、`go vet ./...` 无输出、官方源巡检 **34 scripts, 0 failed**。边界：没有测上游公布的性能数字，也没有发布新版本；两端 pin 随后单独跟进。
+
 ## `new URL`：相对地址、参数迭代与 `URL.parse`（2026-11-09）
 
 上一轮把 URL 的绝对形式对齐了 WHATWG，这一轮用第三批 41 条差分补它的另一半——**带 base 的相对地址**，以及源脚本把查询串当表单遍历的路径。修复前 29/41 一致，12 处真实缺口：
@@ -182,7 +192,7 @@ iOS 的标准接口仍显示「整包返回 · 流式尚未接通」。原因是
 
 > `(a single function in this source is larger than the engine supports; split it into smaller functions)`
 
-回归 `TestCompatibilityRegisterCeilingExplainsItself`：300 个局部变量写进 `loadInfo`，`LoadSource` 必须失败且带这句提示。上限本身仍由 `TestCompatibilityRegisterCeiling` 记录（200 可编译、300 失败）。
+回归 `TestCompatibilityCallRegisterWindowExplainsItself`：一个包含 255 个字面量实参的调用写进 `loadInfo`，`LoadSource` 必须失败且带这句提示。2026-11-09 升级到 moejs v0.1.0 后，旧「单函数 300 个局部变量必失败」的限制已解除，实测 65,536 个局部变量仍可编译；这条提示现在对应**单次调用表达式**的 256 寄存器窗口，由 `TestCompatibilityCallRegisterWindow` 记录（254 可编译、255 触发）。
 ## 服务可以说明自己能做什么（移动端，2026-11-05）
 
 `Supervisor.Describe` 早就有，但移动端没有出口，iOS 的服务页只能盲按 `ping`。新增 `mobile.ServiceDescribe(client, dataDir, id, granted)`：走同一个 resident runtime（不重复编译），返回 `[{"name","title"}]`；没有 `describe` 导出的服务返回 `[]`，这不是错误。
@@ -204,7 +214,7 @@ Mac 在模拟器上跑「服务的 fetch 走 App 传输」时失败：界面报 
 
 回答"能不能覆盖全部"时不能只引用上游的说法，所以把两条最可能挡住真实源的上限钉进 `comic/js/compatibility_limits_test.go`：
 
-- **单函数寄存器上限 256**：一个函数里 200 个局部变量能编译，300 个直接 `SyntaxError: function needs more than 256 registers is not supported yet`。一个从不拆分的长函数（生成的 bundle、写成一整段的 `handle`）会因此加载失败，而不是跑得慢。
+- **单函数局部变量上限（2026-11-09 起已解除）**：旧 alpha 里一个函数 200 个局部变量能编译、300 个直接 `SyntaxError: function needs more than 256 registers is not supported yet`；moejs v0.1.0 起实测 65,536 个局部变量仍可编译。`TestCompatibilityLargeFunctionsCompile` 记录新行为，引擎若退回旧上限会失败。
 - **Intl 只有一部分**：`Intl.DateTimeFormat` 是函数，`Intl.Collator` 是 `undefined`，`Temporal` 没有。用 `Intl.Collator` 排序的源会拿到 TypeError。
 
 这两条不是猜的：测试跑的就是本仓固定的引擎版本，引擎升级若改变上限（任一方向）会表现为测试变化。另有既存的 `TextDecoder` 只支持 UTF-8（`gbk` 报 RangeError）与 `atob` 只读两条。
@@ -523,7 +533,7 @@ CI 在 `63787bc` 上四个作业全绿:`Go (windows-latest)`、`Go (macos-26)`�
 通过 Core 公开 `Runtime.Eval` 入口复现当前固定引擎 `0a0ed36ae7db` 的两类限制,并加入 `comic/js/compatibility_limits_test.go` 的两条测试。两条测试均在 Windows 的 `go test -race` 中通过,日志 `E:/Temp/core-compatibility-limits-tests.log`;独立复现输出在 `E:/Temp/core-compatibility-limits-repro.log`。
 
 - 全局 `atob` 的属性不可写、不可配置。严格模式赋值抛出 `TypeError`;非严格赋值被忽略,随后 `atob("QQ==")` 仍返回 `A`,不能以“不抛错”判断自定义解码器安装成功。函数局部的同名解码器可用,且不改变全局解码器。
-- 最小调用表达式接受 254 个字面量实参;255 个触发 `function needs more than 256 registers`,256 个触发 `too many arguments`。这是单函数 256 个编译寄存器的窗口,包含 callee/this 和其他局部值,不能承诺所有上下文都支持 254 个实参。用动态数组展开传入 1000 个实参通过,且前面的编译错误没有破坏下一次调用。
+- 最小调用表达式接受 254 个字面量实参;255 个触发 `function needs more than 256 registers`,256 个触发 `too many arguments`。这是**单次调用表达式**的 256 个编译寄存器窗口（2026-11-09 复核仍成立），包含 callee/this 和其他局部值，不能承诺所有上下文都支持 254 个实参。用动态数组展开传入 1000 个实参通过,且前面的编译错误没有破坏下一次调用。
 - 源作用域原先**没有 `URL`/`URLSearchParams`**,而官方源 `manhuaren.js` 就用 `new URL(imageUrl).host` 拼 Referer(抛错时退回正则)。现在 Core 的 prelude 提供这两个类,覆盖源实际用到的部分:绝对地址(协议/主机/端口/路径/查询/片段/来源)、相对地址按 base 解析、`searchParams` 的 `get`/`getAll`/`append`/`set`/`delete`/`sort`/`toString`/`forEach`、`URL.canParse`,非法输入抛 `TypeError: Invalid URL`。`search` 与 `searchParams` 是联动的一体(`searchParams.set` 后 `u.search` 就是新查询,反之亦然),`TestURLPolyfillCoversWhatSourcesUse` 与 `TestURLSearchAndSearchParamsAgree` 钉住这些形状。明确不实现的部分:百分号转义的规范化、全部点段边界、IDNA——需要这些的源要自己处理。
 - `TextDecoder("gbk")` 不可用:引擎的 `TextDecoder` 只认 UTF-8 一族,`gbk` 会抛 `RangeError: The "gbk" encoding is not supported`。需要 GBK 的源应走源 API 自己的 `sendMessage` → `method: "convert"` 路径(Go 侧 `simplifiedchinese.GBK`),不要在 JS 里找浏览器解码器。`TestCompatibilityTextDecoderIsUTF8Only` 除确认 UTF-8 可用、GBK 被拒外,已实际验证 `Convert.decodeGbk(new Uint8Array([214,208,206,196]))` 得到“中文”,普通数组也可解码。`Convert.encodeGbk("中文")` 返回 ArrayBuffer,用 `new Uint8Array(...)` 读取为相同四字节;不可编码的“🐾”返回 null,之后仍可继续解码。此证据基于 3be57b5,只加强测试,未修改转换实现;后续用Dart实际对照enough_convert 1.6.0/1.7.1,确认非法字节消耗、单字节欧元及私用区映射存在差异,详见 [GBK兼容边界](GBK-COMPATIBILITY.md);没有执行官方App或确认其配置。此外,`TestHTTPThroughJS` 使用本地伪 Transport 返回 GBK 原始字节,经 `Network.fetchBytes` 到 `Convert.decodeGbk` 得到“中文”,覆盖 HTTP 响应到脚本的完整桥接。日志 `E:/Temp/core-gbk-evidence/bridge-corrected.log`、`E:/Temp/core-gbk-evidence/http-gbk.log`。
 

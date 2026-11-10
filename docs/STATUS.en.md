@@ -13,6 +13,16 @@ English | [简体中文](STATUS.md)
 
 
 
+## Dependency upgrade: moejs v0.1.0 and sqlite v1.62.0 (2026-11-09)
+
+moejs moved from `v0.1.0-alpha.11.0.20261103140239-df42231a9559` to **v0.1.0**, and `modernc.org/sqlite` from `v1.61.1` to **v1.62.0**. CI `42726900043` on the new pin: Ubuntu / Windows / macOS Go and the Apple xcframework + Swift smoke test — **all four jobs succeeded**.
+
+moejs v0.1.0 rewrote the interpreter, the regular-expression path and base64, and **lifted the old alpha's 256-local-variable ceiling per function**: a function with 65,536 locals now compiles, and 300 no longer fails. The test therefore changed from "300 must fail" to `TestCompatibilityLargeFunctionsCompile`, recording that 200 / 300 / 4,096 all compile. That is a behaviour change, not a relaxed test: an engine that brings the ceiling back shows up as a failure.
+
+The 256-register window for **one call expression** remains: 254 literal arguments compile, 255 triggers `function needs more than 256 registers`, and 256 triggers `too many arguments`. `explainEval`'s actionable hint is therefore kept, and the regression is now `TestCompatibilityCallRegisterWindowExplainsItself`, which uses a 255-argument call and checks the hint plus its `key`/`evaluate` context.
+
+Regressions: `go test ./...` **23 packages PASS**, `go vet ./...` with no output, and the official-source sweep **34 scripts, 0 failed**. Boundary: upstream's performance numbers were not measured and no version was released; the two client pins follow separately.
+
 ## `new URL`: relative references, parameter iteration and `URL.parse` (2026-11-09)
 
 The previous round aligned the absolute form of the URL with WHATWG; this one covers its other half with a third batch of 41 cases — **relative references against a base**, and the paths a source walks when it turns a query into a form. Before the fix 29/41 agreed, with 12 real gaps:
@@ -182,7 +192,7 @@ The `256 registers` limit used to surface only as the engine's own words (`funct
 
 > `(a single function in this source is larger than the engine supports; split it into smaller functions)`
 
-Regression `TestCompatibilityRegisterCeilingExplainsItself`: 300 locals inside `loadInfo` must fail `LoadSource` with that hint. The ceiling itself is still recorded by `TestCompatibilityRegisterCeiling` (200 compiles, 300 fails).
+Regression `TestCompatibilityCallRegisterWindowExplainsItself`: one call with 255 literal arguments inside `loadInfo` must fail `LoadSource` with that hint. Since moejs v0.1.0 (2026-11-09) the old "300 locals must fail" ceiling is gone — 65,536 locals compile — so the hint now maps to the **per-call-expression** 256-register window, recorded by `TestCompatibilityCallRegisterWindow` (254 compile, 255 fails).
 ## A service can say what it offers, from mobile (2026-11-05)
 
 `Supervisor.Describe` already existed but had no mobile entry, so the iOS service screen could only guess at `ping`. `mobile.ServiceDescribe(client, dataDir, id, granted)` reuses the same resident runtime (no second compile) and returns `[{"name","title"}]`; a service without a `describe` export answers `[]`, which is not an error.
@@ -204,7 +214,7 @@ Regression: `TestAServiceFetchGoesThroughTheClient` now asserts `cookies` is pre
 
 Answering "does it cover everything" by quoting upstream is not enough, so the two limits most likely to block a real source are pinned in `comic/js/compatibility_limits_test.go`:
 
-- **A 256-register ceiling per function**: 200 locals compile, 300 fail with `SyntaxError: function needs more than 256 registers is not supported yet`. A long function that is never split (a generated bundle, a `handle` written as one block) therefore fails to load rather than running slowly.
+- **The per-function local-variable ceiling (lifted on 2026-11-09)**: under the old alpha 200 locals compiled and 300 failed with `SyntaxError: function needs more than 256 registers is not supported yet`; with moejs v0.1.0, 65,536 locals still compile. `TestCompatibilityLargeFunctionsCompile` records the new behaviour, and fails if an engine brings the old ceiling back.
 - **Intl is partial**: `Intl.DateTimeFormat` is a function, `Intl.Collator` is `undefined`, and `Temporal` is absent. A source that sorts with `Intl.Collator` gets a TypeError.
 
 Neither is a guess: the tests run the engine version this repository pins, so an engine bump that moves a limit shows up as a test change. Two existing ones cover `TextDecoder` being UTF-8 only (`gbk` is a RangeError) and `atob` being read only.
@@ -522,7 +532,7 @@ The same run closed the last `MAGPIE_VENDOR_DIR` skip: four published third-part
 The public Core `Runtime.Eval` entry point reproduces two limits of pinned engine `0a0ed36ae7db`, covered by two tests in `comic/js/compatibility_limits_test.go`. Both pass under Windows `go test -race` (`E:/Temp/core-compatibility-limits-tests.log`); standalone output is in `E:/Temp/core-compatibility-limits-repro.log`.
 
 - Global `atob` is non-writable and non-configurable. Strict assignment throws `TypeError`; sloppy assignment is ignored and `atob("QQ==")` still returns `A`, so absence of an exception does not establish a custom decoder was installed. A function-local decoder works without changing the global.
-- A minimal call expression accepts 254 literal arguments; 255 triggers `function needs more than 256 registers`, and 256 triggers `too many arguments`. This is a 256-register compiler window per function, including callee/this and other local values, not a promise that every context accepts 254 arguments. Dynamic array spread passes 1000 arguments, and the earlier compile errors leave the next call usable.
+- A minimal call expression accepts 254 literal arguments; 255 triggers `function needs more than 256 registers`, and 256 triggers `too many arguments`. This is a 256-register compiler window for **one call expression** (still true when rechecked on 2026-11-09), including callee/this and other local values, not a promise that every context accepts 254 arguments. Dynamic array spread passes 1000 arguments, and the earlier compile errors leave the next call usable.
 - The source realm had **no `URL` or `URLSearchParams`**, and the official `manhuaren.js` builds a Referer from `new URL(imageUrl).host` (falling back to a regex when it throws). Core's prelude now provides both, covering what sources use: absolute addresses (protocol, host, port, path, query, fragment, origin), relative references resolved against a base, `searchParams` with `get`/`getAll`/`append`/`set`/`delete`/`sort`/`toString`/`forEach`, and `URL.canParse`; invalid input throws `TypeError: Invalid URL`. `search` and `searchParams` are one value the way a browser has them (editing one is visible in the other), and `TestURLPolyfillCoversWhatSourcesUse` plus `TestURLSearchAndSearchParamsAgree` pin those shapes. What it deliberately does not do: normalise percent escapes, resolve every dot-segment edge, or implement IDNA — a source that needs those has to handle them.
 - `TextDecoder("gbk")` does not exist here: the engine's `TextDecoder` is the UTF-8 family, and `gbk` throws `RangeError: The "gbk" encoding is not supported`. A source that needs GBK has to go through the source API's own `sendMessage` → `method: "convert"` route (Go's `simplifiedchinese.GBK`) rather than looking for a browser decoder in JS. In addition to UTF-8 decoding and GBK rejection, `TestCompatibilityTextDecoderIsUTF8Only` now actually verifies that `Convert.decodeGbk(new Uint8Array([214,208,206,196]))` returns “中文”; a plain array also decodes. `Convert.encodeGbk("中文")` returns an ArrayBuffer whose `new Uint8Array(...)` view contains those same four bytes. The unrepresentable “🐾” returns null, and decoding still works afterward. This evidence uses Core 3be57b5 and strengthens tests without changing conversion code; subsequent actual Dart runs against enough_convert 1.6.0/1.7.1 confirm differences in malformed-byte consumption, single-byte euro and private-use mappings; see [GBK compatibility](GBK-COMPATIBILITY.en.md). The official app and its configuration were not exercised. Additionally, `TestHTTPThroughJS` uses a local fake transport to return raw GBK bytes, then decodes “中文” through `Network.fetchBytes` and `Convert.decodeGbk`, covering the HTTP response-to-script bridge. Logs: `E:/Temp/core-gbk-evidence/bridge-corrected.log`, `E:/Temp/core-gbk-evidence/http-gbk.log`.
 
