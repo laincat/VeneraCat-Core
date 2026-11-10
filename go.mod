@@ -3,16 +3,17 @@ module github.com/laincat/veneracat-core
 go 1.27.1
 
 require (
-	github.com/MoeForge/moejs v0.1.0-alpha.11.0.20261103140239-df42231a9559
+	github.com/MoeForge/moejs v0.1.0
 	github.com/andybalholm/cascadia v1.3.5
 	github.com/antchfx/htmlquery v1.3.7
 	github.com/antchfx/xpath v1.3.9
 	golang.org/x/net v0.62.0
 	golang.org/x/text v0.43.0
-	modernc.org/sqlite v1.61.1
+	modernc.org/sqlite v1.62.0
 )
 
 require (
+	github.com/MoeForge/moego v0.1.0-alpha.1 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/uuid v1.6.0 // indirect

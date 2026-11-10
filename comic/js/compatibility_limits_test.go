@@ -136,14 +136,17 @@ func TestCompatibilityTextDecoderIsUTF8Only(t *testing.T) {
 	}
 }
 
-// A function with more than 256 registers does not compile.
+// A large function compiles: moejs v0.1.0 lifted the 256-local-variable
+// ceiling the pinned alpha used to have. Measured on this version: a function
+// with 65,536 locals still compiles, so the old "300 locals must fail"
+// expectation is no longer true.
 //
-// The ceiling is measured, not assumed: a source with one very long function
-// (a generated bundle, or a `handle` that never splits) fails to load with a
-// SyntaxError rather than running slowly. Recording it here means an engine
-// bump that moves the limit, in either direction, shows up as a test change
-// instead of a surprise on a user's screen.
-func TestCompatibilityRegisterCeiling(t *testing.T) {
+// The fact is recorded rather than dropped: an engine change that brings the
+// ceiling back, or a source that still hits a compiler window, has to show up
+// as a test change instead of a surprise on a user's screen. The per-call
+// register window is separate and is still covered by
+// TestCompatibilityCallRegisterWindow.
+func TestCompatibilityLargeFunctionsCompile(t *testing.T) {
 	r, err := New(Options{}, Services{})
 	if err != nil {
 		t.Fatal(err)
@@ -159,12 +162,14 @@ func TestCompatibilityRegisterCeiling(t *testing.T) {
 		b.WriteString("return 0})()")
 		return b.String()
 	}
-	if _, err := r.Eval(ctx, build(200)); err != nil {
-		t.Fatalf("200 locals should compile: %v", err)
-	}
-	_, err = r.Eval(ctx, build(300))
-	if err == nil || !strings.Contains(err.Error(), "more than 256 registers") {
-		t.Fatalf("300 locals: %v", err)
+	for _, n := range []int{200, 300, 4096} {
+		got, err := r.Eval(ctx, build(n))
+		if err != nil {
+			t.Fatalf("%d locals should compile: %v", n, err)
+		}
+		if string(got) != "0" {
+			t.Fatalf("%d locals returned %s, want 0", n, got)
+		}
 	}
 }
 
@@ -261,26 +266,27 @@ func TestCompatibilityFailedConversionIsNullAndLogged(t *testing.T) {
 	}
 }
 
-// A source whose single function is too large is told why, in words a source
-// author can act on, rather than only the engine's internal wording.
-func TestCompatibilityRegisterCeilingExplainsItself(t *testing.T) {
+// A source whose single call expression is too large is told why, in words a
+// source author can act on, rather than only the engine's internal wording.
+//
+// The 256-register window still applies to one call expression: 255 literal
+// arguments do not compile even though a function may now hold many more
+// locals (see TestCompatibilityLargeFunctionsCompile).
+func TestCompatibilityCallRegisterWindowExplainsItself(t *testing.T) {
 	r, err := New(Options{}, Services{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
+	args := strings.TrimSuffix(strings.Repeat("1,", 255), ",")
 	var b strings.Builder
 	b.WriteString(`class Big extends ComicSource {
  name = "Big"; key = "big"; version = "1.0.0"
 `)
-	b.WriteString(" loadInfo = async (id) => {\n")
-	for i := 0; i < 300; i++ {
-		fmt.Fprintf(&b, "   let v%d = %d;\n", i, i)
-	}
-	b.WriteString("   return null }\n}\n")
+	b.WriteString(" loadInfo = async (id) => (function (...a) { return a.length })(" + args + ")\n}")
 	_, err = r.LoadSource(context.Background(), b.String())
 	if err == nil {
-		t.Fatal("a source past the register ceiling loaded")
+		t.Fatal("a source past the call register window loaded")
 	}
 	if !strings.Contains(err.Error(), "split it into smaller functions") {
 		t.Fatalf("error = %v", err)

@@ -100,13 +100,14 @@ func classOf(source string) (string, Kind, error) {
 // Only after the key is validated is that engine bound to the key; init()
 // then runs with the source's own storage. Comic and video keys share one
 // namespace, so a key identifies one plugin.
-// explainEval turns the engine's register-ceiling failure into something a
+// explainEval turns the engine's register-window failure into something a
 // source author can act on.
 //
-// The ceiling is the pinned engine's and is recorded in
-// compatibility_limits_test.go: one function holding more than 256 registers
-// does not compile, which for a generated bundle reads like a mysterious
-// syntax error until it is named.
+// Since moejs v0.1.0 the window is per call expression, not per function: a
+// function may hold many locals (65,536 measured in
+// compatibility_limits_test.go), while one call with 255 literal arguments
+// does not compile. A generated bundle that hits it would otherwise read like
+// a mysterious syntax error, so the hint is kept.
 func explainEval(err error) error {
 	if err == nil || !strings.Contains(err.Error(), "more than 256 registers") {
 		return err
