@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,12 +125,14 @@ type blockedServiceHTTP struct {
 	*fakeHost
 	started  chan wireRequest
 	canceled chan int64
+	exited   chan int64
 	release  chan struct{}
+	active   sync.Map
 }
 
 func newBlockedServiceHTTP(t *testing.T) *blockedServiceHTTP {
 	t.Helper()
-	h := &blockedServiceHTTP{fakeHost: &fakeHost{}, started: make(chan wireRequest, 4), canceled: make(chan int64, 4), release: make(chan struct{})}
+	h := &blockedServiceHTTP{fakeHost: &fakeHost{}, started: make(chan wireRequest, 4), canceled: make(chan int64, 4), exited: make(chan int64, 4), release: make(chan struct{})}
 	t.Cleanup(func() { close(h.release) })
 	return h
 }
@@ -139,12 +142,24 @@ func (h *blockedServiceHTTP) HTTP(raw string) (string, error) {
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
 		return "", err
 	}
+	done := make(chan struct{})
+	h.active.Store(req.ID, done)
 	h.started <- req
-	<-h.release
+	select {
+	case <-h.release:
+	case <-done:
+	}
+	h.active.Delete(req.ID)
+	h.exited <- req.ID
 	return `{"status":200}`, nil
 }
 
-func (h *blockedServiceHTTP) CancelHTTP(id int64) { h.canceled <- id }
+func (h *blockedServiceHTTP) CancelHTTP(id int64) {
+	if done, ok := h.active.LoadAndDelete(id); ok {
+		close(done.(chan struct{}))
+	}
+	h.canceled <- id
+}
 
 func receiveServiceTest[T any](t *testing.T, values <-chan T) T {
 	t.Helper()
@@ -354,5 +369,121 @@ export function handle() { return { ok: true } }`)
 	}
 	if out != "[]" {
 		t.Fatalf("methods = %s", out)
+	}
+}
+
+func openServiceRunner(t *testing.T, client Host, dir string) *ServiceRunner {
+	t.Helper()
+	runner, err := NewServiceRunner(client, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(runner.Close)
+	return runner
+}
+
+func TestServiceRunnerOwnsItsHostAndReusesEquivalentGrants(t *testing.T) {
+	dir := t.TempDir()
+	installFixture(t, dir, fetchManifest, `let count = 0; export function handle() { return fetch('https://example.com/') + ++count; }`)
+	first, second := newServiceHost(), newServiceHost()
+	first.body, second.body = "first", "second"
+	left, right := openServiceRunner(t, first, dir), openServiceRunner(t, second, dir)
+	for _, tc := range []struct {
+		runner *ServiceRunner
+		grants string
+		want   string
+	}{
+		{left, "network,storage", `"first1"`},
+		{right, "network,storage", `"second1"`},
+		{left, " storage, network, network ", `"first2"`},
+	} {
+		if got, err := tc.runner.Call(0, "fixture", "go", "", tc.grants, ""); err != nil || got != tc.want {
+			t.Fatalf("call = %q, %v, want %s", got, err, tc.want)
+		}
+	}
+}
+
+func TestServiceRunnerReplacesAndRemovesActiveRuntime(t *testing.T) {
+	dir := t.TempDir()
+	installFixture(t, dir, fetchManifest, `export function handle() { return fetch('https://example.com/'); }`)
+	h := newBlockedServiceHTTP(t)
+	runner := openServiceRunner(t, h, dir)
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.Call(0, "fixture", "go", "", "network", "")
+		done <- err
+	}()
+	request := receiveServiceTest(t, h.started)
+	archive := packageZip(t, strings.Replace(fetchManifest, "1.0.0", "2.0.0", 1), `export function handle() { return 'new'; }`)
+	if _, err := ServiceInstall(dir, "fixture", "next", base64.StdEncoding.EncodeToString(archive)); err != nil {
+		t.Fatal(err)
+	}
+	if err := receiveServiceTest(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("replaced call = %v", err)
+	}
+	if id := receiveServiceTest(t, h.canceled); id != request.ID {
+		t.Fatalf("canceled ID = %d, want %d", id, request.ID)
+	}
+	if got, err := runner.Call(0, "fixture", "go", "", "network", ""); err != nil || got != `"new"` {
+		t.Fatalf("first call after replace = %s, %v", got, err)
+	}
+	if err := ServiceRemove(dir, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Call(0, "fixture", "go", "", "network", ""); err == nil {
+		t.Fatal("removed service could still run")
+	}
+}
+
+func TestServiceRunnerCancellationAndClose(t *testing.T) {
+	dir := t.TempDir()
+	installFixture(t, dir, fetchManifest, `export function handle() { return fetch('https://example.com/'); }`)
+	h := newBlockedServiceHTTP(t)
+	runner := openServiceRunner(t, h, dir)
+	preCanceled := runner.NewCall()
+	runner.Cancel(preCanceled)
+	if _, err := runner.Call(preCanceled, "fixture", "go", "", "network", ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-canceled call = %v", err)
+	}
+	for _, stop := range []func(int64){runner.Cancel, func(int64) { runner.Close() }} {
+		callID := runner.NewCall()
+		done := make(chan error, 1)
+		go func() {
+			_, err := runner.Call(callID, "fixture", "go", "", "network", "")
+			done <- err
+		}()
+		request := receiveServiceTest(t, h.started)
+		stop(callID)
+		if err := receiveServiceTest(t, done); !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled call = %v", err)
+		}
+		if canceled, exited := receiveServiceTest(t, h.canceled), receiveServiceTest(t, h.exited); canceled != request.ID || exited != request.ID {
+			t.Fatalf("request %d canceled = %d, exited = %d", request.ID, canceled, exited)
+		}
+	}
+	if _, err := runner.Call(0, "fixture", "go", "", "network", ""); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("closed runner = %v", err)
+	}
+	select {
+	case req := <-h.started:
+		t.Fatalf("closed runner sent request %d", req.ID)
+	default:
+	}
+}
+
+func TestServiceRunnerRotatesSecretsAndReleasesOldState(t *testing.T) {
+	dir := t.TempDir()
+	manifest := strings.Replace(fetchManifest, "network", "secrets", 1)
+	installFixture(t, dir, manifest, `let cached; export function handle() { return cached ??= secret('token'); }`)
+	runner := openServiceRunner(t, newServiceHost(), dir)
+	for _, token := range []string{"first", "second"} {
+		secrets, _ := json.Marshal(map[string]string{"token": token})
+		want, _ := json.Marshal(token)
+		if got, err := runner.Call(0, "fixture", "go", "", "secrets", string(secrets)); err != nil || got != string(want) {
+			t.Fatalf("call = %s, %v, want %s", got, err, want)
+		}
+	}
+	if _, err := runner.Call(0, "fixture", "go", "", "secrets", ""); err == nil || !strings.Contains(err.Error(), "token") {
+		t.Fatalf("call without previous secrets = %v", err)
 	}
 }

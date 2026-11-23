@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/MoeForge/moejs"
@@ -54,9 +53,10 @@ type Runtime struct {
 	// granted is what the host allows on top of the manifest's request.
 	granted []Permission
 
-	// mu serialises calls. A MoeJS runtime is single-goroutine, and a
+	// gate serialises calls. A MoeJS runtime is single-goroutine, and a
 	// service may be called from several places at once.
-	mu sync.Mutex
+	gate   chan struct{}
+	active context.Context
 	// ctx ends the host work this runtime started; it is cancelled by Close.
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -70,7 +70,49 @@ type Runtime struct {
 // stays refused.
 func NewRuntime(host Host, allowed ...Permission) *Runtime {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Runtime{host: host, ctx: ctx, cancel: cancel, granted: allowed}
+	return &Runtime{host: host, ctx: ctx, cancel: cancel, granted: allowed, gate: make(chan struct{}, 1)}
+}
+
+func (r *Runtime) lock(ctx context.Context) error {
+	select {
+	case r.gate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-r.gate
+			return err
+		}
+		if err := r.ctx.Err(); err != nil {
+			<-r.gate
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.ctx.Done():
+		return r.ctx.Err()
+	}
+}
+
+func (r *Runtime) bind(ctx context.Context, rt *moejs.Runtime) func() {
+	active, cancel := context.WithCancel(ctx)
+	stopLifetime := context.AfterFunc(r.ctx, cancel)
+	if r.ctx.Err() != nil {
+		cancel()
+	}
+	r.active = active
+	interrupted := make(chan struct{})
+	stopInterrupt := context.AfterFunc(active, func() {
+		rt.Interrupt(active.Err())
+		close(interrupted)
+	})
+	return func() {
+		if !stopInterrupt() {
+			<-interrupted
+			rt.ClearInterrupt()
+		}
+		stopLifetime()
+		cancel()
+		r.active = nil
+	}
 }
 
 // Load compiles and loads the service module. The manifest is kept for the
@@ -91,17 +133,23 @@ func (r *Runtime) Load(ctx context.Context, m *Manifest, source string) error {
 		return fmt.Errorf("service: %s does not compile: %w", m.ID, err)
 	}
 	rt := moejs.NewRuntime(moejs.Options{})
+	if err := r.lock(ctx); err != nil {
+		return err
+	}
+	defer func() { <-r.gate }()
+	defer r.bind(ctx, rt)()
 	if err := r.installGlobals(rt, m, grants); err != nil {
 		return err
 	}
 	if err := rt.Load(mod); err != nil {
 		return fmt.Errorf("service: %s does not load: %w", m.ID, err)
 	}
-	r.mu.Lock()
+	if err := r.active.Err(); err != nil {
+		return err
+	}
 	r.mod, r.rt, r.man = mod, rt, m
-	r.mu.Unlock()
 	// The interrupt handle is published separately: a supervisor stops a busy
-	// call from another goroutine, and Call holds mu for the whole call.
+	// call from another goroutine, and Call holds the gate for the whole call.
 	r.running.Store(rt)
 	return nil
 }
@@ -128,7 +176,7 @@ func (r *Runtime) installGlobals(rt *moejs.Runtime, m *Manifest, grants Grants) 
 		if r.host.Fetch == nil {
 			return moejs.Undefined(), fmt.Errorf("service: this host has no network access")
 		}
-		body, err := r.host.Fetch(r.ctx, url)
+		body, err := r.host.Fetch(r.active, url)
 		if err != nil {
 			return moejs.Undefined(), err
 		}
@@ -142,7 +190,7 @@ func (r *Runtime) installGlobals(rt *moejs.Runtime, m *Manifest, grants Grants) 
 		if r.host.StorageGet == nil {
 			return moejs.Undefined(), fmt.Errorf("service: this host has no storage")
 		}
-		value, ok, err := r.host.StorageGet(r.ctx, key)
+		value, ok, err := r.host.StorageGet(r.active, key)
 		if err != nil {
 			return moejs.Undefined(), err
 		}
@@ -160,7 +208,7 @@ func (r *Runtime) installGlobals(rt *moejs.Runtime, m *Manifest, grants Grants) 
 		if r.host.StorageSet == nil {
 			return moejs.Undefined(), fmt.Errorf("service: this host has no storage")
 		}
-		if err := r.host.StorageSet(r.ctx, key, value); err != nil {
+		if err := r.host.StorageSet(r.active, key, value); err != nil {
 			return moejs.Undefined(), err
 		}
 		return moejs.Undefined(), nil
@@ -173,7 +221,7 @@ func (r *Runtime) installGlobals(rt *moejs.Runtime, m *Manifest, grants Grants) 
 		if r.host.Secret == nil {
 			return moejs.Undefined(), fmt.Errorf("service: this host has no account values")
 		}
-		value, err := r.host.Secret(r.ctx, key)
+		value, err := r.host.Secret(r.active, key)
 		if err != nil {
 			return moejs.Undefined(), err
 		}
@@ -202,17 +250,17 @@ func (r *Runtime) installGlobals(rt *moejs.Runtime, m *Manifest, grants Grants) 
 // Call runs one method of the service. The result is the JSON text of what
 // the handler returned.
 func (r *Runtime) Call(ctx context.Context, method string, payload json.RawMessage) (json.RawMessage, error) {
-	if err := ctx.Err(); err != nil {
+	if err := r.lock(ctx); err != nil {
 		return nil, err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer func() { <-r.gate }()
 	if r.mod == nil {
 		return nil, errors.New("service: no service is loaded")
 	}
 	if r.rt == nil {
 		return nil, errors.New("service: the runtime is gone")
 	}
+	defer r.bind(ctx, r.rt)()
 	hook, err := r.mod.Hook("handle")
 	if err != nil {
 		return nil, fmt.Errorf("service: %s exports no handle function: %w", r.man.ID, err)
@@ -226,6 +274,9 @@ func (r *Runtime) Call(ctx context.Context, method string, payload json.RawMessa
 		return nil, err
 	}
 	result, err := r.rt.Call(hook, methodValue, payloadValue)
+	if reason := r.active.Err(); reason != nil {
+		return nil, reason
+	}
 	if err != nil {
 		return nil, fmt.Errorf("service: %s failed on %q: %w", r.man.ID, method, err)
 	}
@@ -256,9 +307,9 @@ func (r *Runtime) Call(ctx context.Context, method string, payload json.RawMessa
 
 // Close ends the runtime and cancels the host work it started.
 func (r *Runtime) Close() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.cancel()
+	r.gate <- struct{}{}
+	defer func() { <-r.gate }()
 	r.running.Store(nil)
 	r.mod, r.rt = nil, nil
 }
@@ -325,19 +376,22 @@ type Method struct {
 // it offers nothing to press, and that is not an error: many services are used
 // by other code rather than by a button.
 func (r *Runtime) Describe(ctx context.Context) ([]Method, error) {
-	if err := ctx.Err(); err != nil {
+	if err := r.lock(ctx); err != nil {
 		return nil, err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer func() { <-r.gate }()
 	if r.mod == nil || r.rt == nil {
 		return nil, errors.New("service: no service is loaded")
 	}
+	defer r.bind(ctx, r.rt)()
 	hook, err := r.mod.Hook("describe")
 	if err != nil {
 		return nil, nil
 	}
 	result, err := r.rt.Call(hook)
+	if reason := r.active.Err(); reason != nil {
+		return nil, reason
+	}
 	if err != nil {
 		return nil, fmt.Errorf("service: %s failed to describe itself: %w", r.man.ID, err)
 	}

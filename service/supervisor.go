@@ -45,6 +45,7 @@ type resident struct {
 	rt       *Runtime
 	manifest *Manifest
 	lastUsed time.Time
+	gate     chan struct{}
 	// busy counts the calls running on this runtime. A sweep or an LRU
 	// eviction must leave it alone: closing the runtime under a call would
 	// fail work that is already in progress, for a reason the caller never
@@ -107,74 +108,45 @@ func NewSupervisorFor(hostFor func(id string) Host, allowed []Permission, opts S
 // interrupted and discarded: a script that is still running cannot be trusted
 // to have left its own state consistent, so the next call loads it again.
 func (s *Supervisor) Call(ctx context.Context, id, method string, payload json.RawMessage) (json.RawMessage, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	res, err := s.acquireBusy(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	defer s.release(res)
-	result, err := s.callWithTimeout(ctx, res, method, payload)
-	if err != nil {
-		if errors.Is(err, ErrTimeout) || errors.Is(err, context.Canceled) {
-			s.drop(id, res)
-			return nil, err
-		}
-		// A script error is the service's problem, not the runtime's: keep it
-		// resident so a transient failure does not force a reload.
-		s.touch(id, res)
-		return nil, err
-	}
-	s.touch(id, res)
-	return result, nil
+	return supervise(ctx, s, id, func(ctx context.Context, rt *Runtime) (json.RawMessage, error) {
+		return rt.Call(ctx, method, payload)
+	})
 }
 
-// callWithTimeout runs the call and interrupts the runtime when the deadline
-// passes. The interrupt is the only way to stop a busy script: the runtime is
-// single-threaded and will not look at a context.
-func (s *Supervisor) callWithTimeout(ctx context.Context, res *resident, method string, payload json.RawMessage) (json.RawMessage, error) {
-	callCtx, cancel := context.WithTimeout(ctx, s.timeout)
-
-	// The interrupt is armed only while the call is running: a goroutine that
-	// woke up late must not interrupt a runtime the next call is already using.
-	// The flag and the calling goroutine take the same lock, so either the call
-	// is still running and gets interrupted, or it finished and is left alone.
-	var state struct {
-		mu   sync.Mutex
-		done bool
+func supervise[T any](ctx context.Context, s *Supervisor, id string, run func(context.Context, *Runtime) (T, error)) (T, error) {
+	var zero T
+	if err := ctx.Err(); err != nil {
+		return zero, err
 	}
-	go func() {
-		<-callCtx.Done()
-		state.mu.Lock()
-		defer state.mu.Unlock()
-		if state.done {
-			return
-		}
-		if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
-			res.interrupt(ErrTimeout)
-			return
-		}
-		res.interrupt(context.Canceled)
-	}()
-
-	result, err := res.rt.Call(callCtx, method, payload)
-	state.mu.Lock()
-	state.done = true
-	state.mu.Unlock()
-	reason := callCtx.Err()
-	cancel()
-
-	if err != nil && reason != nil {
-		if errors.Is(reason, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("%w after %s", ErrTimeout, s.timeout)
-		}
-		return nil, reason
-	}
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	res, err := s.acquire(ctx, id)
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
-	return result, nil
+	defer s.release(res)
+	select {
+	case res.gate <- struct{}{}:
+		defer func() { <-res.gate }()
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	case <-res.rt.ctx.Done():
+		return zero, res.rt.ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	result, err := run(ctx, res.rt)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		s.drop(id, res)
+		return zero, fmt.Errorf("%w after %s", ErrTimeout, s.timeout)
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		s.drop(id, res)
+		return zero, ctx.Err()
+	}
+	s.touch(id, res)
+	return result, err
 }
 
 // release marks one call on the resident as finished.
@@ -186,19 +158,6 @@ func (s *Supervisor) release(res *resident) {
 	}
 }
 
-// acquireBusy is acquire for a call: the resident is marked busy before the
-// lock is released, so no sweep can close it between acquiring and calling.
-func (s *Supervisor) acquireBusy(ctx context.Context, id string) (*resident, error) {
-	res, err := s.acquire(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	res.busy++
-	s.mu.Unlock()
-	return res, nil
-}
-
 // acquire returns the resident runtime of a service, loading it if needed.
 func (s *Supervisor) acquire(ctx context.Context, id string) (*resident, error) {
 	s.mu.Lock()
@@ -206,7 +165,11 @@ func (s *Supervisor) acquire(ctx context.Context, id string) (*resident, error) 
 	if s.closed {
 		return nil, errors.New("service: the supervisor is closed")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if res, ok := s.services[id]; ok {
+		res.busy++
 		return res, nil
 	}
 	if len(s.services) >= s.max {
@@ -224,7 +187,7 @@ func (s *Supervisor) acquire(ctx context.Context, id string) (*resident, error) 
 		rt.Close()
 		return nil, err
 	}
-	res := &resident{rt: rt, manifest: manifest, lastUsed: s.now()}
+	res := &resident{rt: rt, manifest: manifest, lastUsed: s.now(), gate: make(chan struct{}, 1), busy: 1}
 	s.services[id] = res
 	return res, nil
 }
@@ -271,21 +234,19 @@ func (s *Supervisor) evictLocked() {
 // Describe asks a service what it offers, loading it first when it is not
 // resident.
 func (s *Supervisor) Describe(ctx context.Context, id string) ([]Method, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	return supervise(ctx, s, id, func(ctx context.Context, rt *Runtime) ([]Method, error) {
+		return rt.Describe(ctx)
+	})
+}
+
+// Invalidate cancels the work of one resident and unloads its runtime.
+func (s *Supervisor) Invalidate(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if res := s.services[id]; res != nil {
+		delete(s.services, id)
+		res.rt.Close()
 	}
-	res, err := s.acquireBusy(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	defer s.release(res)
-	methods, err := res.rt.Describe(ctx)
-	if err != nil {
-		s.touch(id, res)
-		return nil, err
-	}
-	s.touch(id, res)
-	return methods, nil
 }
 
 // Sweep unloads services that have been idle longer than the idle timeout. It
@@ -340,9 +301,4 @@ func (s *Supervisor) Close() {
 		res.rt.Close()
 		delete(s.services, id)
 	}
-}
-
-// interrupt stops the runtime of one service, naming why.
-func (r *resident) interrupt(reason error) {
-	r.rt.Interrupt(reason)
 }

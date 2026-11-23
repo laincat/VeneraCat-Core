@@ -32,6 +32,7 @@ func ServiceInstall(dataDir, origin, digest, archiveBase64 string) (_ string, er
 	if installErr != nil {
 		return "", installErr
 	}
+	refreshServiceRunners(dataDir, rec.ID)
 	return encode(rec)
 }
 
@@ -51,7 +52,11 @@ func ServiceList(dataDir string) (_ string, err error) {
 // ServiceRemove deletes an installed service package.
 func ServiceRemove(dataDir, id string) (err error) {
 	defer guard(&err)
-	return service.RemovePackage(dataDir, id)
+	if err := service.RemovePackage(dataDir, id); err != nil {
+		return err
+	}
+	refreshServiceRunners(dataDir, id)
+	return nil
 }
 
 // ServiceManifest returns the install record of one service as JSON, so a
