@@ -13,6 +13,7 @@ import (
 
 	"github.com/MoeForge/moejs"
 	"github.com/MoeForge/moejs/eventloop"
+	"github.com/MoeForge/moejs/webapi"
 )
 
 //go:embed init.js
@@ -61,6 +62,9 @@ func newHost(t *testing.T, handle func(m msg) (any, error)) *fakeHost {
 		t.Fatal(err)
 	}
 	h.loop = loop
+	if _, err := webapi.Install(loop, webapi.Options{Client: nil}); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.rt.SetGlobal("sendMessage", moejs.NativeFunc(h.send)); err != nil {
 		t.Fatal(err)
 	}

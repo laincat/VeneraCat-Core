@@ -3,8 +3,6 @@ package magpieplugin
 import (
 	"context"
 	"fmt"
-	"net/url"
-	"strings"
 
 	"github.com/MoeForge/moejs"
 )
@@ -163,35 +161,6 @@ const prelude = `(() => {
     }
     clone() { return new Response({ status: this.status, statusText: this.statusText, url: this.url, headers: this.headers, body: this._body }) }
   }
-  class URL {
-    constructor(input, base) {
-      let text = String(input)
-      if (base !== undefined) {
-        const b = new URL(String(base))
-        if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(text)) {
-          if (text.startsWith("/")) {
-            text = b.protocol + "//" + b.host + text
-          } else {
-            const path = b.pathname.replace(/\/[^/]*$/, "/")
-            text = b.protocol + "//" + b.host + path + text
-          }
-        }
-      }
-      const p = __parseURL(text)
-      this.href = p.href
-      this.protocol = p.protocol
-      this.host = p.host
-      this.hostname = p.hostname
-      this.port = p.port
-      this.pathname = p.pathname
-      this.search = p.search
-      this.hash = p.hash
-      this.username = p.username
-      this.password = p.password
-      this.origin = p.origin
-    }
-    toString() { return this.href }
-  }
   class AbortSignal {
     constructor() { this.aborted = false; this._l = [] }
     addEventListener(name, fn) { if (name === "abort") this._l.push(fn) }
@@ -223,7 +192,6 @@ const prelude = `(() => {
   globalThis.ReadableStream = ReadableStream
   globalThis.Headers = Headers
   globalThis.Response = Response
-  globalThis.URL = URL
   // Request is the other half of fetch that packages actually use: they build
   // one to read its url, headers and body before deciding where to send it.
   class Request {
@@ -292,11 +260,6 @@ func (in *Instance) UseHost(h Host) error {
 		return fmt.Errorf("magpieplugin: nil host")
 	}
 	in.host = h
-	if err := in.SetFunction("__parseURL", 1, func(_ *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {
-		return in.rt.FromGo(parseURL(moejs.Arg(args, 0).String()))
-	}); err != nil {
-		return err
-	}
 	if err := in.SetFunction("__hostBegin", 0, in.hostBegin); err != nil {
 		return err
 	}
@@ -572,49 +535,6 @@ func numberArg(args []moejs.Value, i int) float64 {
 		return moejs.Arg(args, i).AsNumber()
 	}
 	return 0
-}
-
-func parseURL(raw string) map[string]any {
-	u, err := url.Parse(raw)
-	if err != nil {
-		u = &url.URL{}
-	}
-	port := u.Port()
-	hostname := u.Hostname()
-	host := hostname
-	if port != "" {
-		host = hostname + ":" + port
-	}
-	origin := ""
-	if u.Scheme != "" {
-		origin = u.Scheme + "://" + host
-	}
-	search, hash := "", ""
-	if u.RawQuery != "" || strings.Contains(raw, "?") {
-		search = "?" + u.RawQuery
-	}
-	if u.Fragment != "" || strings.Contains(raw, "#") {
-		hash = "#" + u.Fragment
-	}
-	password := ""
-	if u.User != nil {
-		password, _ = u.User.Password()
-	}
-	username := ""
-	if u.User != nil {
-		username = u.User.Username()
-	}
-	// WHATWG URL keeps at least the root path, and a package may compare
-	// pathname to "/" to accept a bare host.
-	pathname := u.Path
-	if pathname == "" {
-		pathname = "/"
-	}
-	return map[string]any{
-		"href": u.String(), "protocol": u.Scheme + ":", "host": host, "hostname": hostname,
-		"port": port, "pathname": pathname, "search": search, "hash": hash,
-		"username": username, "password": password, "origin": origin,
-	}
 }
 
 // AuthStore is the client's sign-in storage for provider packages. Core never

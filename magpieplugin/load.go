@@ -13,6 +13,7 @@ import (
 
 	"github.com/MoeForge/moejs"
 	"github.com/MoeForge/moejs/eventloop"
+	"github.com/MoeForge/moejs/webapi"
 )
 
 // DefaultMemoryLimit bounds one plugin instance. Providers hold model lists
@@ -188,6 +189,9 @@ func (l *Loader) NewInstance(opts Options) (*Instance, error) {
 	}
 	loop, err := eventloop.New(rt, eventloop.Options{})
 	if err != nil {
+		return nil, err
+	}
+	if _, err := webapi.Install(loop, webapi.Options{Client: nil}); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())

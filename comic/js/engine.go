@@ -10,6 +10,7 @@ import (
 
 	"github.com/MoeForge/moejs"
 	"github.com/MoeForge/moejs/eventloop"
+	"github.com/MoeForge/moejs/webapi"
 	"github.com/laincat/veneracat-core/comic/html"
 	"github.com/laincat/veneracat-core/comic/image"
 )
@@ -73,6 +74,9 @@ func (r *Runtime) newEngine(key, partition string, storage SourceStorage) (*engi
 		return nil, err
 	}
 	e.loop = loop
+	if _, err := webapi.Install(loop, webapi.Options{Client: nil}); err != nil {
+		return nil, err
+	}
 	if err := e.rt.SetGlobal("sendMessage", moejs.NativeFunc(e.sendMessage)); err != nil {
 		return nil, err
 	}
