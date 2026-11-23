@@ -6,9 +6,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/laincat/veneracat-core/host"
 	"github.com/laincat/veneracat-core/service"
 )
 
@@ -111,10 +115,114 @@ export function handle(method, payload) {
 	if cookies, ok := host.requests[0]["cookies"]; !ok || cookies != false {
 		t.Fatalf("cookies = %v (present=%v), want false", cookies, ok)
 	}
-	for _, field := range []string{"id", "method", "url", "headers", "bodyBase64"} {
-		if _, ok := host.requests[0][field]; !ok && field != "bodyBase64" {
-			t.Fatalf("request has no %q: %v", field, host.requests[0])
-		}
+	if host.requests[0]["method"] != "GET" || host.requests[0]["id"] == nil {
+		t.Fatalf("request = %v", host.requests[0])
+	}
+}
+
+type blockedServiceHTTP struct {
+	*fakeHost
+	started  chan wireRequest
+	canceled chan int64
+	release  chan struct{}
+}
+
+func newBlockedServiceHTTP(t *testing.T) *blockedServiceHTTP {
+	t.Helper()
+	h := &blockedServiceHTTP{fakeHost: &fakeHost{}, started: make(chan wireRequest, 4), canceled: make(chan int64, 4), release: make(chan struct{})}
+	t.Cleanup(func() { close(h.release) })
+	return h
+}
+
+func (h *blockedServiceHTTP) HTTP(raw string) (string, error) {
+	var req wireRequest
+	if err := json.Unmarshal([]byte(raw), &req); err != nil {
+		return "", err
+	}
+	h.started <- req
+	<-h.release
+	return `{"status":200}`, nil
+}
+
+func (h *blockedServiceHTTP) CancelHTTP(id int64) { h.canceled <- id }
+
+func receiveServiceTest[T any](t *testing.T, values <-chan T) T {
+	t.Helper()
+	select {
+	case value := <-values:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for service test")
+		var zero T
+		return zero
+	}
+}
+
+func TestServiceAndHostBridgeShareRequestIDs(t *testing.T) {
+	h := newBlockedServiceHTTP(t)
+	serviceCtx, cancelService := context.WithCancel(context.Background())
+	defer cancelService()
+	otherCtx, cancelOther := context.WithCancel(context.Background())
+	defer cancelOther()
+	serviceDone := make(chan error, 1)
+	go func() {
+		_, err := fetchThroughClient(serviceCtx, h, "fixture", "https://example.com/service")
+		serviceDone <- err
+	}()
+	serviceReq := receiveServiceTest(t, h.started)
+	otherDone := make(chan error, 1)
+	go func() {
+		bridge := hostBridge{h: h}
+		_, err := bridge.Do(otherCtx, &host.Request{Method: "GET", URL: "https://example.com/comic"})
+		otherDone <- err
+	}()
+	otherReq := receiveServiceTest(t, h.started)
+	if serviceReq.ID == otherReq.ID {
+		t.Fatalf("both requests used ID %d", serviceReq.ID)
+	}
+	cancelService()
+	if id := receiveServiceTest(t, h.canceled); id != serviceReq.ID {
+		t.Fatalf("canceled request %d, want %d", id, serviceReq.ID)
+	}
+	if err := receiveServiceTest(t, serviceDone); !errors.Is(err, context.Canceled) {
+		t.Fatalf("service error = %v", err)
+	}
+	select {
+	case err := <-otherDone:
+		t.Fatalf("other request finished: %v", err)
+	default:
+	}
+	cancelOther()
+	if id := receiveServiceTest(t, h.canceled); id != otherReq.ID {
+		t.Fatalf("canceled request %d, want %d", id, otherReq.ID)
+	}
+	if err := receiveServiceTest(t, otherDone); !errors.Is(err, context.Canceled) {
+		t.Fatalf("other error = %v", err)
+	}
+}
+
+type serviceHTTPError struct {
+	*fakeHost
+	err error
+}
+
+func (h serviceHTTPError) HTTP(string) (string, error) { return "", h.err }
+
+func TestServiceHTTPPrecancelTimeoutAndStatus(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	const endpoint = "https://example.com/"
+	if _, err := fetchThroughClient(ctx, nil, "fixture", endpoint); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-canceled error = %v", err)
+	}
+	timeout := &url.Error{Op: "Get", URL: endpoint, Err: context.DeadlineExceeded}
+	if _, err := fetchThroughClient(context.Background(), serviceHTTPError{err: timeout}, "fixture", endpoint); !errors.Is(err, timeout) {
+		t.Fatalf("host timeout = %v", err)
+	}
+	h := newServiceHost()
+	h.status = 403
+	if _, err := fetchThroughClient(context.Background(), h, "fixture", endpoint); err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+		t.Fatalf("HTTP status error = %v", err)
 	}
 }
 

@@ -3,15 +3,14 @@ package mobile
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 
+	"github.com/laincat/veneracat-core/host"
 	"github.com/laincat/veneracat-core/service"
 )
 
@@ -233,50 +232,15 @@ func parsePermissions(granted string) ([]service.Permission, error) {
 // Core stops waiting for it, which is what makes closing a screen stop the
 // service's traffic rather than leaving it to its own timeout.
 func fetchThroughClient(ctx context.Context, client Host, id, rawURL string) (string, error) {
-	n := serviceRequestSeq.Add(1)
-	req := map[string]any{
-		"id":      n,
-		"method":  "GET",
-		"url":     rawURL,
-		"headers": map[string][]string{},
-		// The host contract lists cookies, so the field is sent even when this
-		// request carries none: a client that decodes the documented shape must
-		// not fail on a missing key before it even dials.
-		"cookies":   false,
-		"partition": "service:" + id,
-	}
-	body, err := json.Marshal(req)
+	bridge := hostBridge{h: client}
+	response, err := bridge.Do(ctx, &host.Request{
+		Method: "GET", URL: rawURL, Partition: "service:" + id,
+	})
 	if err != nil {
 		return "", err
 	}
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			client.CancelHTTP(n)
-		case <-done:
-		}
-	}()
-	out, err := client.HTTP(string(body))
-	if err != nil {
-		return "", err
+	if response.Status < 200 || response.Status > 299 {
+		return "", fmt.Errorf("service: %s answered HTTP %d", rawURL, response.Status)
 	}
-	var res struct {
-		Status     int    `json:"status"`
-		BodyBase64 string `json:"bodyBase64"`
-	}
-	if err := json.Unmarshal([]byte(out), &res); err != nil {
-		return "", fmt.Errorf("mobile: the host's answer is not a response: %v", err)
-	}
-	decoded, err := base64.StdEncoding.DecodeString(res.BodyBase64)
-	if err != nil {
-		return "", fmt.Errorf("mobile: the host's body is not base64: %v", err)
-	}
-	if res.Status < 200 || res.Status > 299 {
-		return "", fmt.Errorf("service: %s answered HTTP %d", rawURL, res.Status)
-	}
-	return string(decoded), nil
+	return string(response.Body), nil
 }
-
-var serviceRequestSeq atomic.Int64
