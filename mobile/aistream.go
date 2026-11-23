@@ -28,10 +28,37 @@ import (
 type aiStreams struct {
 	mu      sync.Mutex
 	next    atomic.Int64
-	decoder map[int64]*aiapi.StreamDecoder
+	decoder map[int64]*aiStream
 }
 
-var aiStreamRegistry = &aiStreams{decoder: map[int64]*aiapi.StreamDecoder{}}
+type aiStream struct {
+	mu      sync.Mutex
+	decoder *aiapi.StreamDecoder
+}
+
+var aiStreamRegistry = &aiStreams{decoder: map[int64]*aiStream{}}
+
+func (s *aiStreams) lookup(handle int64) *aiStream {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.decoder[handle]
+}
+
+func lockAIStream(handleText string) (*aiStream, error) {
+	handle, err := parseHandle(handleText)
+	if err != nil {
+		return nil, err
+	}
+	stream := aiStreamRegistry.lookup(handle)
+	if stream != nil {
+		stream.mu.Lock()
+		if stream.decoder != nil {
+			return stream, nil
+		}
+		stream.mu.Unlock()
+	}
+	return nil, fmt.Errorf("mobile: stream decoder for handle %d is closed or unknown", handle)
+}
 
 // AIStreamOpen starts a decoder for one protocol and returns its handle as
 // text.
@@ -48,7 +75,7 @@ func AIStreamOpen(name string) (_ string, err error) {
 	}
 	handle := aiStreamRegistry.next.Add(1)
 	aiStreamRegistry.mu.Lock()
-	aiStreamRegistry.decoder[handle] = decoder
+	aiStreamRegistry.decoder[handle] = &aiStream{decoder: decoder}
 	aiStreamRegistry.mu.Unlock()
 	return strconv.FormatInt(handle, 10), nil
 }
@@ -57,21 +84,16 @@ func AIStreamOpen(name string) (_ string, err error) {
 // completed, as a JSON array of strings.
 func AIStreamPush(handleText, chunkBase64 string) (_ string, err error) {
 	defer guard(&err)
-	handle, err := parseHandle(handleText)
+	stream, err := lockAIStream(handleText)
 	if err != nil {
 		return "", err
 	}
-	aiStreamRegistry.mu.Lock()
-	decoder := aiStreamRegistry.decoder[handle]
-	aiStreamRegistry.mu.Unlock()
-	if decoder == nil {
-		return "", fmt.Errorf("mobile: no stream decoder for handle %d", handle)
-	}
+	defer stream.mu.Unlock()
 	raw, err := base64.StdEncoding.DecodeString(chunkBase64)
 	if err != nil {
 		return "", fmt.Errorf("mobile: the piece is not base64: %v", err)
 	}
-	deltas, err := decoder.Push(raw)
+	deltas, err := stream.decoder.Push(raw)
 	if err != nil {
 		return "", err
 	}
@@ -85,17 +107,12 @@ func AIStreamPush(handleText, chunkBase64 string) (_ string, err error) {
 // "false".
 func AIStreamDone(handleText string) (_ string, err error) {
 	defer guard(&err)
-	handle, err := parseHandle(handleText)
+	stream, err := lockAIStream(handleText)
 	if err != nil {
 		return "", err
 	}
-	aiStreamRegistry.mu.Lock()
-	decoder := aiStreamRegistry.decoder[handle]
-	aiStreamRegistry.mu.Unlock()
-	if decoder == nil {
-		return "", fmt.Errorf("mobile: no stream decoder for handle %d", handle)
-	}
-	if decoder.Done() {
+	defer stream.mu.Unlock()
+	if stream.decoder.Done() {
 		return "true", nil
 	}
 	return "false", nil
@@ -108,6 +125,13 @@ func AIStreamClose(handleText string) {
 	if err != nil {
 		return
 	}
+	stream := aiStreamRegistry.lookup(handle)
+	if stream == nil {
+		return
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	stream.decoder = nil
 	aiStreamRegistry.mu.Lock()
 	delete(aiStreamRegistry.decoder, handle)
 	aiStreamRegistry.mu.Unlock()

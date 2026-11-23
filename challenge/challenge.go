@@ -157,12 +157,12 @@ type Transport struct {
 	uas map[string]string // partition -> WebView User-Agent
 	// inflight serialises verification per partition, so ten parallel image
 	// requests hitting the same challenge open one WebView, not ten.
-	inflight map[string]*sync.Mutex
+	inflight map[string]chan struct{}
 }
 
 // NewTransport returns a challenge-aware transport.
 func NewTransport(next host.Transport, v host.Verifier) *Transport {
-	return &Transport{Next: next, Verifier: v, uas: map[string]string{}, inflight: map[string]*sync.Mutex{}}
+	return &Transport{Next: next, Verifier: v, uas: map[string]string{}, inflight: map[string]chan struct{}{}}
 }
 
 // UserAgent returns the clearance User-Agent stored for a partition.
@@ -183,12 +183,12 @@ func (t *Transport) SetUserAgent(partition, ua string) {
 	t.uas[partition] = ua
 }
 
-func (t *Transport) lockFor(partition string) *sync.Mutex {
+func (t *Transport) lockFor(partition string) chan struct{} {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	m := t.inflight[partition]
 	if m == nil {
-		m = &sync.Mutex{}
+		m = make(chan struct{}, 1)
 		t.inflight[partition] = m
 	}
 	return m
@@ -211,33 +211,15 @@ func (t *Transport) Do(ctx context.Context, req *host.Request) (*host.Response, 
 		return resp, &ErrChallengeRequired{Kind: kind, URL: req.URL}
 	}
 
-	lock := t.lockFor(req.Partition)
-	lock.Lock()
-	// Another request may have passed the challenge while we waited.
-	if retry, err := t.Next.Do(ctx, t.prepare(req)); err == nil {
-		if _, still := detectAny(retry); !still {
-			lock.Unlock()
-			return retry, nil
-		}
-	}
-	clear, verr := t.Verifier.Verify(ctx, &host.Challenge{
-		Kind: kind, URL: req.URL, Partition: req.Partition, Done: doneFor(kind),
-	})
-	if verr == nil && clear != nil {
-		if clear.UserAgent != "" {
-			t.SetUserAgent(req.Partition, clear.UserAgent)
-		}
-		// A challenge that finishes in the URL hands its clearance back as
-		// parameters of the original address; the retry is the request that
-		// carries them.
-		req = withQuery(req, clear.Query)
-	}
-	lock.Unlock()
+	req, cleared, verr := t.verify(ctx, req, kind)
 	if verr != nil {
 		if errors.Is(verr, host.ErrChallengeDismissed) {
 			return resp, &ErrChallengeRequired{Kind: kind, URL: req.URL}
 		}
 		return nil, verr
+	}
+	if cleared != nil {
+		return cleared, nil
 	}
 	resp, err = t.Next.Do(ctx, t.prepare(req))
 	if err != nil {
@@ -247,6 +229,44 @@ func (t *Transport) Do(ctx context.Context, req *host.Request) (*host.Response, 
 		return resp, &ErrChallengeRequired{Kind: kind, URL: req.URL}
 	}
 	return resp, nil
+}
+
+func (t *Transport) verify(ctx context.Context, req *host.Request, kind host.ChallengeKind) (*host.Request, *host.Response, error) {
+	lock := t.lockFor(req.Partition)
+	select {
+	case lock <- struct{}{}:
+		defer func() { <-lock }()
+	case <-ctx.Done():
+		return req, nil, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return req, nil, err
+	}
+	// Another request may have passed the challenge while we waited.
+	if retry, err := t.Next.Do(ctx, t.prepare(req)); err == nil {
+		if _, still := detectAny(retry); !still {
+			return req, retry, ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return req, nil, err
+	}
+	clear, verr := t.Verifier.Verify(ctx, &host.Challenge{
+		Kind: kind, URL: req.URL, Partition: req.Partition, Done: doneFor(kind),
+	})
+	if err := ctx.Err(); err != nil {
+		return req, nil, err
+	}
+	if verr == nil && clear != nil {
+		if clear.UserAgent != "" {
+			t.SetUserAgent(req.Partition, clear.UserAgent)
+		}
+		// A challenge that finishes in the URL hands its clearance back as
+		// parameters of the original address; the retry is the request that
+		// carries them.
+		req = withQuery(req, clear.Query)
+	}
+	return req, nil, verr
 }
 
 // detectAny recognises either challenge shape. Cloudflare is checked first: its

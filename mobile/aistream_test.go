@@ -3,6 +3,7 @@ package mobile
 import (
 	"encoding/base64"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -52,6 +53,43 @@ func TestAPushWithoutAHandleIsRefused(t *testing.T) {
 	}
 	if _, err := AIStreamPush("not-a-handle", "AAAA"); err == nil {
 		t.Fatal("a non-numeric handle was accepted")
+	}
+}
+
+func TestAIStreamConcurrentPushDoneAndClose(t *testing.T) {
+	handle, err := AIStreamOpen("chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := AIStreamOpen("chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer AIStreamClose(other)
+	chunk := base64.StdEncoding.EncodeToString([]byte("data: [DONE]\n\n"))
+	var group sync.WaitGroup
+	for range 24 {
+		group.Go(func() { _, _ = AIStreamPush(handle, chunk) })
+		group.Go(func() { _, _ = AIStreamDone(handle) })
+	}
+	group.Go(func() { AIStreamClose(handle) })
+	group.Wait()
+	for _, operation := range []func() error{
+		func() error { _, err := AIStreamPush(handle, chunk); return err },
+		func() error { _, err := AIStreamDone(handle); return err },
+	} {
+		if err := operation(); err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("closed stream reported %v", err)
+		}
+	}
+	if done, err := AIStreamDone(other); done != "false" || err != nil {
+		t.Fatalf("independent stream = %q, %v", done, err)
+	}
+	if _, err := AIStreamPush(other, chunk); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := AIStreamDone(other); done != "true" || err != nil {
+		t.Fatalf("independent stream after push = %q, %v", done, err)
 	}
 }
 

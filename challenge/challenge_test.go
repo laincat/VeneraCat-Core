@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/laincat/veneracat-core/host"
 )
@@ -150,6 +151,90 @@ func TestParallelRequestsOpenOneVerifier(t *testing.T) {
 	}
 	if v.calls != 1 {
 		t.Fatalf("verifier calls = %d, want 1", v.calls)
+	}
+}
+
+type challengeTestTransport func(context.Context, *host.Request) (*host.Response, error)
+
+func (fn challengeTestTransport) Do(ctx context.Context, req *host.Request) (*host.Response, error) {
+	return fn(ctx, req)
+}
+
+type challengeTestVerifier func(context.Context, *host.Challenge) (*host.Clearance, error)
+
+func (fn challengeTestVerifier) Verify(ctx context.Context, req *host.Challenge) (*host.Clearance, error) {
+	return fn(ctx, req)
+}
+
+func TestCanceledChallengeWaiterAndLateClearance(t *testing.T) {
+	started := make(chan struct{})
+	queued := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	finish := func() { releaseOnce.Do(func() { close(release) }) }
+	defer finish()
+	var verifies atomic.Int32
+	transport := NewTransport(challengeTestTransport(func(_ context.Context, req *host.Request) (*host.Response, error) {
+		if strings.HasSuffix(req.URL, "/queued") {
+			queued <- struct{}{}
+		}
+		if req.Header.Get("User-Agent") == "other" {
+			return &host.Response{Status: 200}, nil
+		}
+		return cfResponse(403), nil
+	}), challengeTestVerifier(func(_ context.Context, req *host.Challenge) (*host.Clearance, error) {
+		if req.Partition == "other" {
+			return &host.Clearance{UserAgent: "other"}, nil
+		}
+		if verifies.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return &host.Clearance{UserAgent: "late"}, nil
+	}))
+	first, cancelFirst := context.WithCancel(context.Background())
+	defer cancelFirst()
+	second, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	run := func(ctx context.Context, path, partition string) <-chan error {
+		done := make(chan error, 1)
+		go func() {
+			_, err := transport.Do(ctx, &host.Request{URL: "https://example.test/" + path, Partition: partition})
+			done <- err
+		}()
+		return done
+	}
+	wait := func(signal <-chan struct{}) {
+		t.Helper()
+		select {
+		case <-signal:
+		case <-time.After(5 * time.Second):
+			t.Fatal("challenge did not start")
+		}
+	}
+	check := func(result <-chan error, want error) {
+		t.Helper()
+		select {
+		case err := <-result:
+			if !errors.Is(err, want) {
+				t.Fatalf("got %v, want %v", err, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("challenge request did not return")
+		}
+	}
+	firstResult := run(first, "first", "shared")
+	wait(started)
+	secondResult := run(second, "queued", "shared")
+	wait(queued)
+	cancelSecond()
+	check(secondResult, context.Canceled)
+	check(run(context.Background(), "independent", "other"), nil)
+	cancelFirst()
+	finish()
+	check(firstResult, context.Canceled)
+	if verifies.Load() != 1 || len(queued) != 0 || transport.UserAgent("shared") != "" {
+		t.Fatal("canceled work retried, verified again, or applied a late clearance")
 	}
 }
 
