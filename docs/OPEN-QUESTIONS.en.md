@@ -13,7 +13,7 @@ The user chose a direction for security, data, distribution and priorities. Thes
 - Importing cookies from a `.venera` backup: confirm on every import, listing the source partitions that would be written. The current importer still takes a Boolean, **still to be changed**.
 - Tag translation: add a subscribable community glossary as an entry in the unified source collection, after checking its licence. The built-in table stays the offline default.
 - AI colourisation comes later; afterwards users may install models with non-commercial licences (such as MangaNinjia, CC BY-NC) with a visible warning.
-- Desktop is **portable only** for now and unsigned: data, user files and plugins all live in named subfolders of the program folder, whose top level stays clean. Nekophage now uses `data/` `cache/` `logs/` `webview/`; see `E:/Code/deliveries/2026-11-09-nekophage-portable/`.
+- Desktop ships as an unsigned **portable** build. Nekophage keeps client data under `data/`, `cache/`, `logs/` and `webview/` in the program folder.
 - iOS wants both routes (sideloading and the App Store); AltStore / SideStore comes first, and the LGPL exception's legal review is deferred until before a formal App Store submission.
 - Core **keeps commit-hash pins**, no version tags; both clients stay fixed through `scripts/core-version`.
 - After dependency upgrades: TMDB/Bangumi service plugins, AI colourisation and Core compatibility hardening are allowed; **no UI rewrite**.

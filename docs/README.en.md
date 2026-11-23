@@ -16,12 +16,11 @@ English | [简体中文](README.md)
 - [Magpie plugin system](AI-SERVICE.en.md): original provider packages on iOS, independent accounts/runtime and compatibility verification
 - [Magpie compatibility](MAGPIE-COMPATIBILITY.en.md): what has actually been run, how it was checked, and what is plainly unsupported
 - [JavaScript isolation](JS-ISOLATION.en.md): why each source runs in its own engine
-- [Status](STATUS.en.md): what is implemented, verified and pending
-- [Code audit](CODE-AUDIT.en.md): cancellation, AI validation and three-project cleanup findings
+- [Status](STATUS.en.md) maps the current architecture, compatibility limits, verification and pending work.
 
 ## Notes
 
-`notes/` holds reference material from experiments, such as the MoeJS feasibility test. It is not part of the specifications.
-| [VERIFICATION.en.md](VERIFICATION.en.md) | Verification and evidence: what counts, how to recheck, and three times "verified" was wrong |
-| [OPEN-QUESTIONS.en.md](OPEN-QUESTIONS.en.md) | Open decisions: five questions that need a product or security call, and what staying open costs |
-| [PROVIDER-TEMPLATE.en.md](PROVIDER-TEMPLATE.en.md) | Writing a provider package: the contract, two templates that run, packaging and self-checks |
+- The [verification guide](VERIFICATION.en.md) explains how to reproduce checks and distinguish evidence across environments.
+- [Open questions](OPEN-QUESTIONS.en.md) records decisions that still need product input.
+- [Provider templates](PROVIDER-TEMPLATE.en.md) provides runnable examples, packaging and self-checks.
+- [GBK compatibility](GBK-COMPATIBILITY.en.md) records differences in valid characters, invalid bytes and private-use mappings.

@@ -12,7 +12,7 @@
 - `.venera` 备份导入 Cookie：每次导入弹窗确认，并列出会写进哪些源分区。当前导入路径仍按布尔参数决定是否恢复 Cookie，**待改**。
 - 标签翻译：增加可订阅的社区词典，作为统一源合集里的条目，先核对许可证。现有内置词表保留为默认离线层。
 - AI 上色排在后面；之后允许用户自装非商用许可模型（如 MangaNinjia，CC BY-NC）并在界面上给出警告。
-- 桌面当前只提供**便携版**、暂不签名：数据、用户文件、插件等全部存到程序目录下的对应子目录，程序根目录保持干净整洁。Nekophage 本轮已落地 `data/` `cache/` `logs/` `webview/`，见 `E:/Code/deliveries/2026-11-09-nekophage-portable/`。
+- 桌面当前提供未签名的**便携版**。Nekophage 在程序目录下使用 `data/`、`cache/`、`logs/` 和 `webview/` 保存客户端数据。
 - iOS 两条路都要（侧载 + App Store），当前先走 AltStore / SideStore；LGPL 例外的法务意见留到正式上架前。
 - Core **继续用提交号 pin**，不打版本 tag；两端仍以 `scripts/core-version` 固定。
 - 依赖升级后可以做 TMDB/Bangumi 服务插件化、AI 上色、Core 兼容加固；**不做 UI 重写**。

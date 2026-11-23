@@ -57,10 +57,12 @@ Core 自带三种标准协议的请求构造:OpenAI Chat Completions、OpenAI Re
 路由策略(按难度、到期时间、额度挑账号)、配额查询、正文脱敏属于**插件**,不在这一层。Core 只提供标准协议的调用底座与扩展机制,见 [AI-CORE-BOUNDARY.md](AI-CORE-BOUNDARY.md)。
 
 
-## 尚未实现
+## 客户端解码与验收
 
-- **客户端流式界面**:Core 已能边收边解析(`NewWithStream` + `SendAIRequestStream`),但 iOS 标准接口页面还没有接入,仍走 `SendAIRequest` 的整包路径并在 `streamed` 里说 `false`。
-- **真实账号验证**:尚未用真实凭据调用过任何供应商接口。
+标准 AI 与 Magpie 共用 `host/sse` 帧规则，接受开头的 BOM 和 LF、CR、CRLF 行尾。空行提交事件，流结束时丢弃未闭合的事件。每个事件块的字节上限包括注释和字段名。
+
+- Nekularity 的标准 AI 流式路径由 Swift 读取分块并调用 `AIStreamOpen`、`AIStreamPush`、`AIStreamDone` 与 `AIStreamClose`。句柄串行处理分块与完成检查，关闭后拒绝使用。调用方按网络到达顺序提交分块。
+- 真实账号和设备上的增量显示、首块与取消需要分别验收。
 
 ## mobile 入口
 

@@ -31,4 +31,4 @@ Keep existing Core conversion behavior and both client pins. This change adds so
 
 Minimal reproduction: compare Dart's `GbkCodec().decode([0x61, 0xff, 0x62])` with `GbkCodec(allowInvalid: true).decode([0x61, 0xff, 0x62])`; in a Core source, run `Convert.decodeGbk(new Uint8Array([0x61, 0xff, 0x62]))`. The first throws, while the latter two return `a�` and `a�b` respectively.
 
-Original input, Dart/Go drivers and per-case JSON results are under `E:/Temp/core-gbk-differential/`. Execution logs are `dart-1.6.0.log`, `dart-1.7.1.log` and `core.log`; the Go driver uses `go run -race`. These tests did not contact real comic sites or execute the official app.
+Rerun the byte samples in the table with Dart and Core. Run `go test -race ./comic/js -run 'TestCompatibilityTextDecoderIsUTF8Only|TestHTTPThroughJS'` for the Core script and HTTP bridge regressions. Live comic sites and the official app require separate verification.

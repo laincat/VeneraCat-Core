@@ -57,10 +57,12 @@ Ambiguous input is refused: two JSON values in one body, a repeated key in one o
 Routing policies — picking an account by difficulty, expiry or remaining quota — quota queries and content masking belong to **plugins**, not to this layer. Core provides the standard-protocol base and the extension mechanism; see [AI-CORE-BOUNDARY.en.md](AI-CORE-BOUNDARY.en.md).
 
 
-## Not implemented yet
+## Client decoding and verification
 
-- **The client's streaming screen**: Core can now read a reply as it arrives (`NewWithStream` + `SendAIRequestStream`), but the iOS standard-interface screen has not been wired to it and still uses the whole-answer `SendAIRequest`, reporting `false` in `streamed`.
-- Real-account verification: no vendor endpoint has been called with a real credential yet.
+Standard AI and Magpie share framing in `host/sse`. It accepts an initial BOM and LF, CR or CRLF line endings. A blank line dispatches the event. An unfinished event is discarded at EOF. The event block limit counts comments and field names.
+
+- Nekularity's standard AI streaming path reads chunks in Swift and calls `AIStreamOpen`, `AIStreamPush`, `AIStreamDone` and `AIStreamClose`. Each handle serializes pushes and completion checks and rejects use after closing. Callers submit chunks in network order.
+- Incremental display, first-chunk delivery and cancellation need separate verification on devices with real accounts.
 
 ## The mobile entry points
 

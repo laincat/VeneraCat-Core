@@ -91,9 +91,13 @@ The host manages several services with `service.Supervisor`:
 - A script error is not a broken runtime: the error goes back to the caller and the service stays resident, so the next call uses the same runtime.
 - The identity of the manifest the loader returns must match the service that was asked for, or it is refused.
 
+Packages live in `services/<id>/` and ordinary KV data uses the desktop-compatible `services/<id>.json` layout. Core migrates package-local `storage.json` before the first read or write and before replacing or removing a package. When both exist, the external file wins on conflicts and legacy-only keys are copied over. Removing a package preserves ordinary KV. Go hosts can get shared storage callbacks from `service.OpenStorage`.
+
+On mobile, create a session with `NewServiceRunner(host, dataDir)` and call `Close` when leaving the profile. Pass an ID reserved with `NewCall` to `Call`, `Describe` and `Cancel`. Successful replacement or removal evicts the affected service. Grants are compared as sets, account values are supplied per call, and rotation discards the old runtime. The package-level entry points retain their signatures and use a temporary runner per call. Clients that need resident JavaScript state can use the session API.
+
 ## Transport bridge
 
-A service does not get an `http.Client`; its network goes through `service.Bridge`:
+Mobile services use the shared host bridge for GET requests with cookies disabled and partition `service:<id>`. Desktop hosts can use `service.Bridge`:
 
 | Rule | Behaviour |
 | --- | --- |
@@ -103,13 +107,12 @@ A service does not get an `http.Client`; its network goes through `service.Bridg
 | Size | one response is bounded at 4 MiB by default |
 | Cookies | none by default; a service is not a browser page |
 
-`Bridge.Host(Host{})` puts the bridge behind the runtime, so a service's `fetch` has no other way out.
+`Bridge.Host(Host{})` connects the desktop transport to the runtime. The runtime accesses the network through its injected `Host.Fetch` callback.
 
 ## Not implemented yet
 
 - Async handlers that wait: an `async function handle` that settles during the call is read as its result; one that is still waiting is refused clearly instead of being turned into an empty object. `fetch` still blocks, so there is nothing useful to wait for yet.
 - Module imports and dependency installs: a service may only use the files in its own package.
-- Install, upgrade and interface: Core has the contract alone, and neither client is wired to it.
 - Permission prompts: a client should show the requested and refused permissions, and there is no shared interface for that yet.
 
 ## Relation to comic and video sources

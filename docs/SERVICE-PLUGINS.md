@@ -91,9 +91,13 @@ export function describe() {
 - 脚本抛错不算运行时坏了：错误返回给调用方，服务继续常驻，下一次调用仍走同一个运行时。
 - 加载器返回的清单身份必须与请求的服务一致，否则拒绝。
 
+安装包保存在 `services/<id>/`，普通 KV 使用桌面兼容的 `services/<id>.json`。首次读取、写入以及替换或删除旧包之前，Core 自动迁移包内的 `storage.json`。并存时保留包外的同名键，并补齐旧文件独有的键。删除包会保留普通 KV。Go 宿主可以通过 `service.OpenStorage` 获取共享的存储回调。
+
+移动端通过 `NewServiceRunner(host, dataDir)` 创建会话，离开该 profile 时调用 `Close`。`NewCall` 预留的 ID 可传给 `Call`、`Describe` 和 `Cancel`。成功安装替换或删除时只驱逐对应服务。权限按集合比较，账号值按调用传入，轮换时丢弃旧运行时。旧的包级调用入口保持签名，每次调用使用临时运行器。需要常驻 JavaScript 状态的客户端迁到会话入口。
+
 ## 传输桥
 
-服务的网络不是直接拿 `http.Client` 用，而是走 `service.Bridge`：
+移动端服务使用共享宿主桥发送 GET，明确禁用 Cookie，分区为 `service:<id>`。桌面宿主可使用 `service.Bridge`：
 
 | 规则 | 行为 |
 | --- | --- |
@@ -103,13 +107,12 @@ export function describe() {
 | 体积 | 单次响应上限默认 4 MiB |
 | Cookie | 默认不带 Cookie，服务不是浏览器页面 |
 
-`Bridge.Host(Host{})` 把桥接进运行时，服务里的 `fetch` 只能走这条路。
+`Bridge.Host(Host{})` 将桌面传输接进运行时。运行时通过注入的 `Host.Fetch` 访问网络。
 
 ## 尚未实现
 
 - 会等待的异步 handler：`async function handle` 在调用内就结算的，按它的结果读；仍在等待的会被明确拒绝，而不是被当成空对象。`fetch` 仍是同步阻塞调用，所以真正的等待没有意义。
 - 模块导入与依赖安装：服务只能使用自身包内文件。
-- 安装、升级与界面：Core 侧只有契约，两端尚未接入。
 - 权限提示：客户端应显示申请与被拒的权限，目前尚无统一界面。
 
 ## 与漫画源、视频源的关系

@@ -16,12 +16,11 @@
 - [Magpie 插件系统](AI-SERVICE.md):iOS 直接兼容供应商原包,独立的账号与运行环境,兼容验证计划
 - [Magpie 兼容性](MAGPIE-COMPATIBILITY.md):哪些能力被真的跑过、怎么验证的,哪些明确不支持
 - [JavaScript 隔离](JS-ISOLATION.md):为什么每个源一个引擎
-- [状态](STATUS.md):已实现、已验证和待办
-- [代码体检](CODE-AUDIT.md):取消、AI 校验与三项目架构清理结论
+- [状态](STATUS.md)汇总现行架构、兼容限制、验收入口与待办。
 
 ## 笔记
 
-`notes/` 存放实验留下的参考材料,例如 MoeJS 可行性测试,不属于规格。
-| [VERIFICATION.md](VERIFICATION.md) | 验证与证据:什么算验证过,怎么复核,以及三次「看起来验过」的教训 |
-| [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) | 悬而未决的决定:需要产品/安全取向的五件事,以及不定时的后果 |
-| [PROVIDER-TEMPLATE.md](PROVIDER-TEMPLATE.md) | 写一个供应商包:契约、两个可跑的模板、怎么压包与自测 |
+- [验证指南](VERIFICATION.md)说明如何验证、复核和区分不同环境的证据。
+- [未决问题](OPEN-QUESTIONS.md)记录仍需产品决策的事项。
+- [供应商包模板](PROVIDER-TEMPLATE.md)提供可运行的模板、打包与自测步骤。
+- [GBK 兼容边界](GBK-COMPATIBILITY.md)记录有效字符、非法字节与私用区映射的差异。

@@ -31,4 +31,4 @@ Dart SDK 压缩包已与 Google 官方 SHA-256 核对并检查 ZIP CRC，依赖�
 
 最小复现：Dart 中比较 `GbkCodec().decode([0x61, 0xff, 0x62])` 与 `GbkCodec(allowInvalid: true).decode([0x61, 0xff, 0x62])`；Core 源脚本执行 `Convert.decodeGbk(new Uint8Array([0x61, 0xff, 0x62]))`。前者抛错，后两者分别为 `a�` 和 `a�b`。
 
-原始输入、Dart/Go 驱动及逐例 JSON 输出保存在 `E:/Temp/core-gbk-differential/`。执行日志为 `dart-1.6.0.log`、`dart-1.7.1.log` 和 `core.log`，Go 驱动使用 `go run -race`。测试没有连接真实漫画站点，也没有执行官方 App。
+使用上表字节样本在 Dart 与 Core 中复跑。Core 的脚本和 HTTP 桥接回归可运行 `go test -race ./comic/js -run 'TestCompatibilityTextDecoderIsUTF8Only|TestHTTPThroughJS'`。真实漫画站点与官方 App 需要单独验收。
