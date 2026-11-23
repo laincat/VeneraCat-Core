@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
       - name: gofmt
         if: runner.os != 'Windows'
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
@@ -45,15 +45,21 @@ jobs:
 
   apple:
     name: Apple (xcframework + Swift smoke test)
-    runs-on: macos-26
+    runs-on: xcode-27
     needs: go
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+          go-version: stable
+      # The image's default Xcode trails its newest one; take the newest release build.
+      - name: Select the newest Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | grep -E '/Xcode_[0-9.]+\.app$' | sort -V | tail -1)
+          echo "xcode=$xcode"
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+        shell: bash
       - name: Build xcframework and measure
         run: |
           set -o pipefail
@@ -74,7 +80,7 @@ jobs:
           scheme=$(xcodebuild -list -json | python3 -c 'import json,sys; d=json.load(sys.stdin); s=(d.get("workspace") or d.get("project") or {}).get("schemes",[]); print(next((x for x in s if x.endswith("-Package")), s[0] if s else "CoreSmoke"))')
           echo "scheme=$scheme"
           xcodebuild test -scheme "$scheme" \
-            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -destination 'platform=iOS Simulator,name=iPhone 18 Pro' \
             2>&1 | tee ../../build/smoke-ios.log | grep -E 'SMOKE|Test Case|error:|\*\* TEST' || true
           grep -q '\*\* TEST SUCCEEDED \*\*' ../../build/smoke-ios.log
         shell: bash
