@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,5 +54,56 @@ func TestAFailedPersistLeavesNoInstalledSource(t *testing.T) {
 	}
 	if !lib.IsInstalled("first_source") {
 		t.Fatal("the rollback removed the source that had already been saved")
+	}
+}
+
+func TestFailedRemovalAndDisablePreserveInstalledProfile(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	c, err := core.Open(core.Options{DataDir: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	lib := New(c)
+	const key = "first_source"
+	if _, err := lib.InstallText(ctx, firstPersisted, "original"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Store().SaveData(key, "keep", []byte("42")); err != nil {
+		t.Fatal(err)
+	}
+	partition := core.ComicPartition(key)
+	if err := c.Jar().Import(partition, []*http.Cookie{{Name: "sid", Value: "keep", Domain: "example.test", Expires: time.Now().Add(time.Hour)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "plugins.json.tmp"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.Remove(ctx, key); err == nil {
+		t.Fatal("remove hid the write failure")
+	}
+	if err := lib.SetEnabled(ctx, key, false); err == nil {
+		t.Fatal("disable hid the write failure")
+	}
+	if rec, ok := c.Record(key); !ok || !rec.Enabled {
+		t.Fatalf("live record changed: %+v", rec)
+	}
+	reopened, err := core.Open(core.Options{DataDir: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if failed, err := New(reopened).Restore(ctx); err != nil || len(failed) > 0 {
+		t.Fatalf("restore: %v %v", err, failed)
+	}
+	if rec, ok := reopened.Record(key); !ok || !rec.Enabled {
+		t.Fatalf("disk record changed: %+v", rec)
+	}
+	if raw, found, err := reopened.Store().LoadData(key, "keep"); err != nil || !found || string(raw) != "42" {
+		t.Fatalf("disk data changed: %s %v", raw, err)
+	}
+	if value := reopened.Jar().Header(partition, "https://example.test"); value != "sid=keep" {
+		t.Fatalf("disk cookie changed: %q", value)
 	}
 }
