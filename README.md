@@ -17,13 +17,14 @@ Nekularity(iOS/iPadOS)与 Nekophage(桌面)共用的核心库,使用 Go 编写,�
 - **人机验证**:识别 Cloudflare 挑战,由客户端在 WebView 中完成后自动重试。
 - **HLS**:播放列表解析、改写、去广告、AES-128 解密。
 
-Core 不发起网络连接,也不打开 WebView 或播放器;这些由客户端通过 `host` 包中的接口提供。
+核心引擎通过 `host` 接口获得网络与平台能力。Go 客户端可选用 `gohost` 的 HTTP、分区 Cookie、资料存储与源管理，WebView 和播放器由客户端提供。
 
 ## 目录
 
 | 目录 | 内容 |
 |---|---|
 | `host/` | 客户端需要实现的接口 |
+| `gohost/` | 可选共享 Go 宿主 |
 | `comic/` | 漫画源运行时与宿主接口 |
 | `video/` | 视频数据模型、Kazumi、内置源、HLS |
 | `plugin/` | 统一的插件注册表 |

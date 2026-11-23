@@ -17,13 +17,14 @@ The shared core of Nekularity (iOS/iPadOS) and Nekophage (desktop), written in G
 - **Human verification**: recognises Cloudflare challenges, which the client completes in a WebView before Core retries.
 - **HLS**: playlist parsing, rewriting, ad removal and AES-128 decryption.
 
-Core opens no network connections, WebViews or players; clients provide them through the interfaces in the `host` package.
+The engine receives network and platform capabilities through the `host` interfaces. Go clients can use `gohost` for HTTP, partitioned cookies, profile storage and source management, and provide their own WebView and player.
 
 ## Layout
 
 | Directory | Contents |
 |---|---|
 | `host/` | Interfaces the client implements |
+| `gohost/` | Optional shared Go host |
 | `comic/` | Comic source runtime and host APIs |
 | `video/` | Video data model, Kazumi, built-ins, HLS |
 | `plugin/` | Unified plugin registry |

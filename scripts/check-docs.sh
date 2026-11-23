@@ -8,7 +8,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 ROOT_ALLOWED=".git .github .gitattributes .gitignore AGENTS.md AGENTS.en.md LICENSE COPYING README.md README.en.md go.mod go.sum
-apple attribution aiapi backup challenge comic docs host magpieplugin mobile plugin scripts service subscription version video webcookie build"
+apple attribution aiapi backup challenge comic docs gohost host magpieplugin mobile plugin scripts service subscription version video webcookie build"
 
 fail=0
 err() { printf 'check-docs: %s\n' "$*" >&2; fail=1; }

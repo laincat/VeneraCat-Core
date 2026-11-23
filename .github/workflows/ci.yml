@@ -41,6 +41,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sh scripts/check-docs.sh
       - name: Error text is English
+        if: runner.os == 'Linux'
         run: sh scripts/check-error-text.sh
 
   apple:
@@ -56,7 +57,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p build
-          sh scripts/mac-verify.sh 2>&1 | tee build/mac-verify.log
+          sh scripts/mac-verify.sh --build-only 2>&1 | tee build/mac-verify.log
         shell: bash
       - name: Swift smoke test (macOS)
         working-directory: apple/CoreSmoke

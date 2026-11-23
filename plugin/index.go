@@ -37,6 +37,11 @@ func (r *Registry) InstallFromComicIndex(ctx context.Context, indexURL string, e
 	return r.installExpecting(ctx, entry.Key, TypeComic, body, entry.URL, indexURL, "", entry.Attribution)
 }
 
+// InstallExpecting installs a plugin with the declared key and optional digest.
+func (r *Registry) InstallExpecting(ctx context.Context, wantKey string, typ Type, body, origin, indexURL, sha string) (*Record, error) {
+	return r.installExpecting(ctx, wantKey, typ, body, origin, indexURL, sha, attribution.Info{})
+}
+
 // installExpecting installs body only if it declares wantKey. The check and
 // the install happen under the operation lock, so a mismatching plugin is
 // never visible in the registry.
@@ -50,15 +55,9 @@ func (r *Registry) installExpecting(ctx context.Context, wantKey string, typ Typ
 	if r.taken(wantKey) {
 		return nil, &KeyExistsError{Key: wantKey}
 	}
-	a, err := r.activate(ctx, typ, body)
+	a, err := r.activateFor(ctx, typ, body, wantKey, "")
 	if err != nil {
 		return nil, err
-	}
-	if a.key != wantKey {
-		// activate succeeded, so the runtime held no script under a.key
-		// before: the loaded engine is ours to unload.
-		r.deactivate(ctx, a)
-		return nil, fmt.Errorf("%w: index lists %s, script declares %s", ErrKey, wantKey, a.key)
 	}
 	if r.taken(a.key) {
 		r.deactivate(ctx, a)

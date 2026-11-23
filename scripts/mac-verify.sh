@@ -18,12 +18,14 @@ say "toolchain"
 go version
 xcodebuild -version | head -1
 
-say "go checks"
-fail=0
-test -z "$(gofmt -l .)" && result gofmt ok || { gofmt -l .; result gofmt FAIL; fail=1; }
-go vet ./... && result vet ok || { result vet FAIL; fail=1; }
-go test -race -count=1 ./... && result test ok || { result test FAIL; fail=1; }
-[ "$fail" -eq 0 ] || exit 1
+if [ "${1:-}" != --build-only ]; then
+	say "go checks"
+	fail=0
+	test -z "$(gofmt -l .)" && result gofmt ok || { gofmt -l .; result gofmt FAIL; fail=1; }
+	go vet ./... && result vet ok || { result vet FAIL; fail=1; }
+	go test -race -count=1 ./... && result test ok || { result test FAIL; fail=1; }
+	[ "$fail" -eq 0 ] || exit 1
+fi
 
 say "gomobile"
 # gomobile bind looks up gobind on PATH; build the pinned one into build/bin.

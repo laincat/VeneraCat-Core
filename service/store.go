@@ -35,13 +35,21 @@ type Installed struct {
 // Account values are not part of this: a client owns its credentials, and Core
 // only keeps the code.
 func InstallPackage(ctx context.Context, dataDir, origin, digest string, archive []byte) (*Installed, error) {
-	return installPackage(ctx, dataDir, origin, digest, archive, os.Rename)
+	return InstallPackageExpecting(ctx, dataDir, "", origin, digest, archive)
 }
 
-func installPackage(ctx context.Context, dataDir, origin, digest string, archive []byte, rename func(string, string) error) (*Installed, error) {
+// InstallPackageExpecting checks the manifest ID before changing the profile.
+func InstallPackageExpecting(ctx context.Context, dataDir, expectedID, origin, digest string, archive []byte) (*Installed, error) {
+	return installPackage(ctx, dataDir, expectedID, origin, digest, archive, os.Rename)
+}
+
+func installPackage(ctx context.Context, dataDir, expectedID, origin, digest string, archive []byte, rename func(string, string) error) (*Installed, error) {
 	manifest, source, files, err := ReadPackageZip(archive)
 	if err != nil {
 		return nil, err
+	}
+	if expectedID != "" && manifest.ID != expectedID {
+		return nil, fmt.Errorf("service: expected %q, package declares %q", expectedID, manifest.ID)
 	}
 	if err := checkCompiles(ctx, manifest, source); err != nil {
 		return nil, err

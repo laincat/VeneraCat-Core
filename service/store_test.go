@@ -255,7 +255,7 @@ func TestServiceInstallRestoresPreviousPackage(t *testing.T) {
 				}
 				return os.Rename(from, to)
 			}
-			if _, err := installPackage(ctx, dir, "second", "", second, rename); !errors.Is(err, injected) {
+			if _, err := installPackage(ctx, dir, "", "second", "", second, rename); !errors.Is(err, injected) {
 				t.Fatalf("install returned %v", err)
 			}
 			manifest, source, err := ReadInstalledPackage(dir, "demo")

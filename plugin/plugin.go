@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"sort"
 	"sync"
-	"time"
 
 	"github.com/laincat/veneracat-core/attribution"
 	"github.com/laincat/veneracat-core/comic/js"
@@ -125,9 +124,6 @@ func digest(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// rollbackTimeout bounds restoring a previous version after a failed update.
-const rollbackTimeout = 30 * time.Second
-
 // activation is a loaded plugin not yet published in the registry.
 type activation struct {
 	key, name, version string
@@ -148,6 +144,28 @@ func (a *activation) apply(rec *Record) {
 // activate loads body without touching the registry maps. A JS script whose
 // type does not match typ is unloaded again.
 func (r *Registry) activate(ctx context.Context, typ Type, body string) (*activation, error) {
+	return r.activateFor(ctx, typ, body, "", "")
+}
+
+func checkDeclaration(typ Type, expected string, meta js.Meta) error {
+	got := TypeComic
+	if meta.Kind == js.KindVideo {
+		got = TypeVideoJS
+	}
+	if got != typ {
+		return fmt.Errorf("%w: script is a %s plugin, not %s", ErrWrongUse, got, typ)
+	}
+	return checkKey(expected, meta.Key)
+}
+
+func checkKey(expected, actual string) error {
+	if expected != "" && expected != actual {
+		return fmt.Errorf("%w: expected %s, script declares %s", ErrKey, expected, actual)
+	}
+	return nil
+}
+
+func (r *Registry) activateFor(ctx context.Context, typ Type, body, expected, replacing string) (*activation, error) {
 	switch typ {
 	case TypeKazumi:
 		rule, err := kazumi.Parse([]byte(body))
@@ -156,26 +174,23 @@ func (r *Registry) activate(ctx context.Context, typ Type, body string) (*activa
 		}
 		p := kazumi.New(rule, r.transport)
 		info := p.Info()
+		if err := checkKey(expected, info.Key); err != nil {
+			return nil, err
+		}
 		return &activation{key: info.Key, name: info.Name, version: info.Version, attribution: info.Attribution, provider: p}, nil
 	case TypeComic, TypeVideoJS:
 		if r.js == nil {
 			return nil, errors.New("plugin: no JavaScript runtime")
 		}
-		meta, err := r.js.LoadSource(ctx, body)
+		meta, err := r.js.LoadSourceChecked(ctx, body, replacing, func(meta js.Meta) error {
+			return checkDeclaration(typ, expected, meta)
+		})
 		if err != nil {
 			return nil, err
 		}
 		a := &activation{key: meta.Key, name: meta.Name, version: meta.Version, attribution: meta.Attribution,
 			warnings: meta.Warnings, loadedScript: true}
-		got := TypeComic
-		if meta.Kind == js.KindVideo {
-			got = TypeVideoJS
-		}
-		if got != typ {
-			r.js.Unload(ctx, meta.Key)
-			return nil, fmt.Errorf("%w: script is a %s plugin, not %s", ErrWrongUse, got, typ)
-		}
-		if got == TypeVideoJS {
+		if typ == TypeVideoJS {
 			vp, err := r.js.VideoProvider(meta.Key)
 			if err != nil {
 				r.js.Unload(ctx, meta.Key)
@@ -267,6 +282,15 @@ func (r *Registry) install(ctx context.Context, typ Type, body, origin, indexURL
 // and type. The previous version stays active if the new one fails, and a
 // disabled plugin stays disabled.
 func (r *Registry) Replace(ctx context.Context, key string, typ Type, body, origin, indexURL, wantSHA256 string) (*Record, error) {
+	return r.replace(ctx, key, typ, body, origin, indexURL, wantSHA256, false)
+}
+
+// ReplaceExpecting also checks the declared identity of disabled scripts.
+func (r *Registry) ReplaceExpecting(ctx context.Context, key string, typ Type, body, origin, indexURL, wantSHA256 string) (*Record, error) {
+	return r.replace(ctx, key, typ, body, origin, indexURL, wantSHA256, true)
+}
+
+func (r *Registry) replace(ctx context.Context, key string, typ Type, body, origin, indexURL, wantSHA256 string, checkDisabled bool) (*Record, error) {
 	r.op.Lock()
 	defer r.op.Unlock()
 	r.mu.Lock()
@@ -292,45 +316,34 @@ func (r *Registry) Replace(ctx context.Context, key string, typ Type, body, orig
 		// Validate without running anything: the new body is checked when the
 		// user enables the plugin. Kazumi rules can be parsed safely.
 		if typ == TypeKazumi {
-			a, err := r.activate(ctx, typ, body)
+			a, err := r.activateFor(ctx, typ, body, key, "")
 			if err != nil {
 				return nil, err
 			}
-			if a.key != key {
-				return nil, fmt.Errorf("%w: %s became %s", ErrKey, key, a.key)
-			}
 			a.apply(&next)
 		} else {
-			if _, err := js.ClassName(body); err != nil {
+			if checkDisabled {
+				if r.js == nil {
+					return nil, errors.New("plugin: no JavaScript runtime")
+				}
+				meta, err := r.js.CheckSource(ctx, body, func(meta js.Meta) error {
+					return checkDeclaration(typ, key, meta)
+				})
+				if err != nil {
+					return nil, err
+				}
+				next.Name, next.Version = meta.Name, meta.Version
+			} else if _, err := js.ClassName(body); err != nil {
 				return nil, err
+			} else {
+				next.Name, next.Version = prev.Name, prev.Version
 			}
-			next.Name, next.Version = prev.Name, prev.Version
 		}
 		r.publish(&next, nil)
 		return clone(&next), nil
 	}
-	if typ.script() {
-		r.js.Unload(ctx, key)
-	}
-	a, err := r.activate(ctx, typ, body)
-	if err == nil && a.key != key {
-		r.deactivate(ctx, a)
-		err = fmt.Errorf("%w: %s became %s", ErrKey, key, a.key)
-	}
+	a, err := r.activateFor(ctx, typ, body, key, key)
 	if err != nil {
-		// Bring the previous version back with a fresh context: ctx may be
-		// what failed.
-		if typ.script() {
-			rctx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
-			pa, rerr := r.activate(rctx, typ, prev.Body)
-			cancel()
-			if rerr != nil {
-				prev.Enabled = false
-				r.publish(&prev, nil)
-				return nil, fmt.Errorf("%w (and the previous version could not be restored, it is now disabled: %v)", err, rerr)
-			}
-			r.publish(&prev, pa.provider)
-		}
 		return nil, err
 	}
 	a.apply(&next)
@@ -390,11 +403,7 @@ func (r *Registry) Restore(ctx context.Context, recs []Record) map[string]error 
 			}
 		} else {
 			var a *activation
-			a, err = r.activate(ctx, rec.Type, rec.Body)
-			if err == nil && a.key != rec.Key {
-				r.deactivate(ctx, a)
-				err = fmt.Errorf("%w: %s became %s", ErrKey, rec.Key, a.key)
-			}
+			a, err = r.activateFor(ctx, rec.Type, rec.Body, rec.Key, "")
 			if err == nil {
 				a.apply(&rec)
 				r.publish(&rec, a.provider)
@@ -444,13 +453,9 @@ func (r *Registry) SetEnabled(ctx context.Context, key string, on bool) error {
 		}
 		p = b.New(r.transport)
 	default:
-		a, err := r.activate(ctx, rec.Type, rec.Body)
+		a, err := r.activateFor(ctx, rec.Type, rec.Body, rec.Key, "")
 		if err != nil {
 			return err
-		}
-		if a.key != key {
-			r.deactivate(ctx, a)
-			return fmt.Errorf("%w: %s became %s", ErrKey, key, a.key)
 		}
 		a.apply(&rec)
 		p = a.provider

@@ -116,6 +116,21 @@ func explainEval(err error) error {
 }
 
 func (r *Runtime) LoadSource(ctx context.Context, source string) (Meta, error) {
+	return r.loadSource(ctx, source, "", false, nil)
+}
+
+// LoadSourceChecked checks the declaration before exposing host services. If
+// replacing is set, the new engine takes that key only after successful init.
+func (r *Runtime) LoadSourceChecked(ctx context.Context, source, replacing string, check func(Meta) error) (Meta, error) {
+	return r.loadSource(ctx, source, replacing, false, check)
+}
+
+// CheckSource reads an unbound declaration without registering it or running init.
+func (r *Runtime) CheckSource(ctx context.Context, source string, check func(Meta) error) (Meta, error) {
+	return r.loadSource(ctx, source, "", true, check)
+}
+
+func (r *Runtime) loadSource(ctx context.Context, source, replacing string, inspect bool, check func(Meta) error) (Meta, error) {
 	r.loadMu.Lock()
 	defer r.loadMu.Unlock()
 	if r.isClosed() {
@@ -161,8 +176,16 @@ func (r *Runtime) LoadSource(ctx context.Context, source string) (Meta, error) {
 	meta := Meta{Kind: kind, Name: anyText(m.Name), Key: anyText(m.Key), Version: anyText(m.Version),
 		MinAppVersion: anyText(m.MinAppVersion), URL: anyText(m.URL)}
 	meta.Attribution, meta.Warnings = attribution.ParseJSON(m.Author, m.Homepage)
-	if err := r.validate(meta); err != nil {
+	if check != nil {
+		if err := check(meta); err != nil {
+			return Meta{}, err
+		}
+	}
+	if err := r.validate(meta, replacing); err != nil {
 		return Meta{}, err
+	}
+	if inspect {
+		return meta, nil
 	}
 	// Bind the engine to its key. From here on messages use the source's
 	// partition and storage; writes made while loading are kept.
@@ -187,17 +210,21 @@ func (r *Runtime) LoadSource(ctx context.Context, source string) (Meta, error) {
 		r.smu.Unlock()
 		return Meta{}, ErrClosed
 	}
-	if _, dup := r.sources[meta.Key]; dup {
+	previous := r.engines[meta.Key]
+	if previous != nil && meta.Key != replacing {
 		r.smu.Unlock()
 		return Meta{}, &DuplicateKeyError{Key: meta.Key, Kind: meta.Kind}
 	}
 	r.sources[meta.Key], r.engines[meta.Key] = meta, e
 	r.smu.Unlock()
 	keep = true
+	if previous != nil {
+		previous.close()
+	}
 	return meta, nil
 }
 
-func (r *Runtime) validate(m Meta) error {
+func (r *Runtime) validate(m Meta, replacing string) error {
 	switch {
 	case m.Name == "":
 		return &LoadError{"name is required"}
@@ -211,7 +238,7 @@ func (r *Runtime) validate(m Meta) error {
 	r.smu.Lock()
 	_, dup := r.sources[m.Key]
 	r.smu.Unlock()
-	if dup {
+	if dup && m.Key != replacing {
 		return &DuplicateKeyError{Key: m.Key, Kind: m.Kind}
 	}
 	if m.MinAppVersion != "" {
@@ -275,6 +302,8 @@ type SearchOptionGroup struct {
 	// array belongs breaks the source's own JSON.parse.
 	DefaultValues []string `json:"defaultValues,omitempty"`
 }
+
+func (g SearchOptionGroup) IsMultiSelect() bool { return g.Type == "multi-select" }
 
 // SourceSetting is one entry of a source's settings declaration: the fields
 // the official client renders as a select, a switch, an input or a button.
