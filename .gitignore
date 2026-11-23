@@ -2,5 +2,6 @@
 *.test
 coverage.out
 /build/
+__pycache__/
 apple/CoreSmoke/.build/
 apple/CoreSmoke/.swiftpm/

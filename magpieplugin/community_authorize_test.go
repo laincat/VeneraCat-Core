@@ -90,10 +90,9 @@ func TestCloudflareMethodDeclaresItsPrompts(t *testing.T) {
 // completion, keeping the URL and headers so the test can check that the account
 // id reached the base URL and the token reached the header.
 type cloudflareRecorder struct {
-	mu       sync.Mutex
-	urls     []string
-	authz    []string
-	complete string
+	mu    sync.Mutex
+	urls  []string
+	authz []string
 }
 
 func (h *cloudflareRecorder) Do(_ context.Context, req *Request) (*Response, error) {

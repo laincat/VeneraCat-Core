@@ -2,7 +2,6 @@ package backup
 
 import (
 	"sort"
-	"strings"
 )
 
 // CookieTargets decides which partitions receive the backup's cookies.
@@ -36,18 +35,6 @@ func (p *Plan) ResolveCookieTargets(installed []string) {
 		keys = append(keys, source.Key)
 	}
 	p.CookieTargets = CookieTargets(keys, installed)
-}
-
-// usable reports whether a cookie could ever be sent to a host.
-func (c Cookie) usable() bool {
-	if strings.TrimSpace(c.Name) == "" || c.Value == "" {
-		return false
-	}
-	domain := strings.TrimPrefix(strings.TrimSpace(c.Domain), ".")
-	if domain == "" || strings.ContainsAny(domain, "/: ") || !strings.Contains(domain, ".") {
-		return false
-	}
-	return true
 }
 
 func dedupe(keys []string) []string {

@@ -684,7 +684,7 @@ func TestAbortSignalCancelsTheRequest(t *testing.T) {
 
 // streamHost answers with a head and then three chunks, like a vendor's SSE
 // reply.
-type streamHost struct{ closed bool }
+type streamHost struct{}
 
 func (h *streamHost) Do(_ context.Context, req *Request) (*Response, error) {
 	return &Response{Status: 200, Header: map[string][]string{}, Body: []byte("unused"), URL: req.URL}, nil

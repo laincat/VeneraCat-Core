@@ -81,7 +81,6 @@ type fakeUI struct {
 	mu       sync.Mutex
 	messages []string
 	selected *int
-	dialogs  int
 	invoked  chan struct{}
 }
 
@@ -92,7 +91,6 @@ func (u *fakeUI) ShowMessage(m string) {
 }
 func (u *fakeUI) ShowDialog(_, _ string, actions []DialogAction) error {
 	u.mu.Lock()
-	u.dialogs++
 	u.mu.Unlock()
 	if len(actions) > 0 {
 		return actions[0].Invoke()

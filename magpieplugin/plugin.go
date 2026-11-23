@@ -258,8 +258,6 @@ const pluginGlue = `globalThis.__magpie = (() => {
 })()
 `
 
-var errNoPlugin = errors.New("magpieplugin: this package exports no plugin function")
-
 // InstallPluginBridge makes the package's plugin reachable as JSON hooks. It
 // must run after the globals the package expects (fetch, client.auth) exist.
 func (in *Instance) InstallPluginBridge() error {
