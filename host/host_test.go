@@ -73,6 +73,23 @@ func TestValidHeader(t *testing.T) {
 	}
 }
 
+func TestValidHeaderPreservesByteGrammarAndErrors(t *testing.T) {
+	if err := ValidHeader("", ""); err == nil || err.Error() != "empty header name" {
+		t.Fatalf("empty header name: %v", err)
+	}
+	for code := range 256 {
+		name := string([]byte{byte(code)})
+		validName := code >= 'a' && code <= 'z' || code >= 'A' && code <= 'Z' || code >= '0' && code <= '9' || strings.ContainsRune("!#$%&'*+-.^_|~\x60", rune(code))
+		if err := ValidHeader(name, ""); (err == nil) != validName || err != nil && !strings.HasPrefix(err.Error(), "invalid header name ") {
+			t.Fatalf("header name byte %d: %v", code, err)
+		}
+		validValue := code == '\t' || code >= 0x20 && code != 0x7f
+		if err := ValidHeader("X-Value", name); (err == nil) != validValue || err != nil && err.Error() != "invalid value for header \"X-Value\"" {
+			t.Fatalf("header value byte %d: %v", code, err)
+		}
+	}
+}
+
 // Header keys arrive from scripts and rules with whatever case they liked.
 func TestHeaderValueIgnoresCase(t *testing.T) {
 	h := http.Header{"referer": {"https://a.test/"}}

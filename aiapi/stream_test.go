@@ -135,6 +135,27 @@ func TestNewStreamDecoderRejectsUnknownProtocol(t *testing.T) {
 	}
 }
 
+func TestStreamDecoderSharesBOMAndCRFraming(t *testing.T) {
+	d, err := NewStreamDecoder(Chat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text strings.Builder
+	body := "\ufeff: keepalive\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\r\rdata: [DONE]\r\r"
+	for _, b := range []byte(body) {
+		parts, err := d.Push([]byte{b})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, part := range parts {
+			text.WriteString(part)
+		}
+	}
+	if text.String() != "Hello" || !d.Done() {
+		t.Fatalf("text = %q, done = %v", text.String(), d.Done())
+	}
+}
+
 func TestRequireStreamNeedsTheBoolean(t *testing.T) {
 	if err := RequireStream([]byte(`{"model":"m","stream":true}`)); err != nil {
 		t.Fatalf("stream:true rejected: %v", err)

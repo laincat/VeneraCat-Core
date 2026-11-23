@@ -18,11 +18,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-)
 
-// maxStreamEvent bounds one buffered event. A provider that never sends a blank
-// line would otherwise grow the buffer until the app is killed.
-const maxStreamEvent = 1 << 20
+	"github.com/laincat/veneracat-core/host/sse"
+)
 
 // StreamDecoder turns a protocol's server-sent events into text deltas.
 //
@@ -30,11 +28,7 @@ const maxStreamEvent = 1 << 20
 // the chunk callback is called.
 type StreamDecoder struct {
 	protocol Protocol
-	// pending holds the bytes of the line being read.
-	pending []byte
-	// data collects the data lines of the event being read.
-	data      []string
-	dataBytes int
+	frame    sse.Framer
 	// done records that the provider said the answer is complete.
 	done bool
 }
@@ -55,49 +49,20 @@ func (d *StreamDecoder) Done() bool { return d.done }
 // completed, in order. A piece may complete none, one, or several events.
 func (d *StreamDecoder) Push(chunk []byte) ([]string, error) {
 	out := make([]string, 0, 2)
-	d.pending = append(d.pending, chunk...)
-	for {
-		index := bytes.IndexByte(d.pending, '\n')
-		if index < 0 {
-			break
+	err := d.frame.Push(chunk, func(event sse.Event) error {
+		text, err := d.dispatch(event.Data)
+		if text != "" {
+			out = append(out, text)
 		}
-		line := strings.TrimSuffix(string(d.pending[:index]), "\r")
-		d.pending = d.pending[index+1:]
-		if line == "" {
-			// A blank line closes the event: dispatch what its data lines said.
-			text, err := d.dispatch()
-			if err != nil {
-				return out, err
-			}
-			if text != "" {
-				out = append(out, text)
-			}
-			continue
-		}
-		if strings.HasPrefix(line, "data:") {
-			value := strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
-			d.dataBytes += len(value) + 1
-			if d.dataBytes > maxStreamEvent {
-				return out, errors.New("aiapi: the stream sent an event larger than 1 MiB")
-			}
-			d.data = append(d.data, value)
-		}
-		// event:, id:, retry: and comments carry nothing this decoder needs.
+		return err
+	})
+	if errors.Is(err, sse.ErrEventTooLarge) {
+		err = errors.New("aiapi: the stream sent an event larger than 1 MiB")
 	}
-	if len(d.pending)+d.dataBytes > maxStreamEvent {
-		return out, errors.New("aiapi: the stream sent an event larger than 1 MiB")
-	}
-	return out, nil
+	return out, err
 }
 
-// dispatch interprets the event that just ended.
-func (d *StreamDecoder) dispatch() (string, error) {
-	if len(d.data) == 0 {
-		return "", nil
-	}
-	payload := strings.Join(d.data, "\n")
-	d.data = d.data[:0]
-	d.dataBytes = 0
+func (d *StreamDecoder) dispatch(payload string) (string, error) {
 	if payload == "[DONE]" {
 		d.done = true
 		return "", nil

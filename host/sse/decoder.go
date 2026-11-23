@@ -3,7 +3,7 @@
 package sse
 
 import (
-	"bufio"
+	"bytes"
 	"errors"
 	"io"
 	"strings"
@@ -22,116 +22,173 @@ type Event struct {
 }
 
 // Decoder reads on demand. The caller owns cancellation and closing the reader.
-// It is not safe for concurrent use. After a non-EOF error it is terminal.
+// It is not safe for concurrent use. Read and framing errors are terminal.
 type Decoder struct {
-	scan  *bufio.Scanner
-	limit int
-	first bool
-	id    string
-	err   error
+	reader  io.Reader
+	frame   Framer
+	buffer  [4096]byte
+	pending []byte
+	err     error
 }
 
-// NewDecoder limits each event block's wire bytes, including comments and field
-// names (each line ending counts as one byte). Zero selects the 1 MiB default;
-// explicit limits must be between 1 byte and 64 MiB. This also bounds lines and
-// prevents a stream of comments from growing one unfinished block indefinitely.
+// NewDecoder limits each event block, including comments and field names.
+// LF, CR and CRLF count as one byte. Zero selects the 1 MiB default.
 func NewDecoder(r io.Reader, maxEventBytes int) (*Decoder, error) {
 	if r == nil {
 		return nil, errors.New("sse: nil reader")
 	}
-	if maxEventBytes == 0 {
-		maxEventBytes = DefaultMaxEventBytes
-	}
-	if maxEventBytes < 1 || maxEventBytes > 64<<20 {
+	if maxEventBytes < 0 || maxEventBytes > 64<<20 {
 		return nil, errors.New("sse: byte limit must be between 1 and 67108864")
 	}
-	s := bufio.NewScanner(r)
-	s.Split(splitLine)
-	// Allow a line's terminator and an optional initial UTF-8 BOM in the
-	// scanner; Next enforces the actual block limit separately.
-	s.Buffer(make([]byte, min(4096, maxEventBytes+4)), maxEventBytes+4)
-	return &Decoder{scan: s, limit: maxEventBytes, first: true}, nil
+	return &Decoder{reader: r, frame: Framer{limit: maxEventBytes}}, nil
 }
 
-// Next returns a message only after a blank line terminates a block containing
-// a data field. An unterminated final block is discarded, as SSE requires.
-// Event-only and comment-only blocks are not messages. Unknown fields and retry
-// instructions are ignored: reconnection is a transport policy of the client.
+// Next returns the next blank-line-terminated event with at least one data field.
+// An unfinished block at EOF is discarded.
 func (d *Decoder) Next() (Event, error) {
-	if d.err != nil {
-		return Event{}, d.err
+	if d.frame.err != nil {
+		return Event{}, d.frame.err
 	}
-	var data strings.Builder
-	kind := ""
-	seenData, used := false, 0
-	for d.scan.Scan() {
-		line := d.scan.Text()
-		if d.first {
-			line = strings.TrimPrefix(line, "\xef\xbb\xbf")
-			d.first = false
-		}
-		if line == "" {
-			if seenData {
-				if kind == "" {
-					kind = "message"
-				}
-				return Event{Type: kind, Data: strings.TrimSuffix(data.String(), "\n"), ID: d.id}, nil
+	for emptyReads := 0; ; {
+		if len(d.pending) != 0 {
+			event, ready, rest := d.frame.next(d.pending)
+			d.pending = rest
+			if d.frame.err != nil {
+				return Event{}, d.frame.err
 			}
-			kind, used = "", 0
-			continue
+			if ready {
+				return event, nil
+			}
 		}
-		used += len(line) + 1
-		if used > d.limit {
-			d.err = ErrEventTooLarge
+		if d.err != nil {
+			if len(d.frame.line) != 0 {
+				d.frame.acceptLine(d.frame.line)
+				d.frame.line = nil
+			}
+			if d.frame.err != nil {
+				return Event{}, d.frame.err
+			}
 			return Event{}, d.err
 		}
-		// SSE is UTF-8; malformed input becomes replacement characters.
-		line = strings.ToValidUTF8(line, "\ufffd")
-		field, value, _ := strings.Cut(line, ":")
-		value = strings.TrimPrefix(value, " ")
-		switch field {
-		case "data":
-			seenData = true
-			data.WriteString(value)
-			data.WriteByte('\n')
-		case "event":
-			kind = value
-		case "id":
-			if !strings.ContainsRune(value, 0) {
-				d.id = value
-			}
+		n, err := d.reader.Read(d.buffer[:])
+		d.pending, d.err = d.buffer[:n], err
+		if n != 0 {
+			emptyReads = 0
+		} else if emptyReads++; emptyReads >= 100 && err == nil {
+			d.err = io.ErrNoProgress
 		}
 	}
-	d.err = d.scan.Err()
-	if errors.Is(d.err, bufio.ErrTooLong) {
-		d.err = ErrEventTooLarge
-	}
-	if d.err == nil {
-		d.err = io.EOF
-	}
-	return Event{}, d.err
 }
 
-// splitLine accepts LF, CRLF and CR, even when CRLF spans read chunks. At EOF
-// the remaining text is a line, but not a blank-line dispatch on its own.
-func splitLine(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	for i, b := range data {
-		switch b {
-		case '\n':
-			return i + 1, data[:i], nil
-		case '\r':
-			if i+1 == len(data) && !atEOF {
-				return 0, nil, nil
+// Framer accepts arbitrary SSE byte chunks. Its zero value uses the default
+// event limit. The caller serializes access to a Framer.
+type Framer struct {
+	limit    int
+	used     int
+	started  bool
+	skipLF   bool
+	line     []byte
+	data     strings.Builder
+	kind, id string
+	err      error
+}
+
+// Push dispatches complete events in order. A framing error is terminal.
+func (f *Framer) Push(chunk []byte, yield func(Event) error) error {
+	for len(chunk) > 0 && f.err == nil {
+		event, ready, rest := f.next(chunk)
+		chunk = rest
+		if ready {
+			if err := yield(event); err != nil {
+				return err
 			}
-			n := i + 1
-			if n < len(data) && data[n] == '\n' {
-				n++
-			}
-			return n, data[:i], nil
 		}
 	}
-	if atEOF && len(data) > 0 {
-		return len(data), data, nil
+	return f.err
+}
+
+func (f *Framer) byteLimit() int {
+	if f.limit == 0 {
+		return DefaultMaxEventBytes
 	}
-	return 0, nil, nil
+	return f.limit
+}
+
+func (f *Framer) next(chunk []byte) (Event, bool, []byte) {
+	for len(chunk) != 0 && f.err == nil {
+		if f.skipLF {
+			f.skipLF = false
+			if chunk[0] == '\n' {
+				chunk = chunk[1:]
+				continue
+			}
+		}
+		end := bytes.IndexAny(chunk, "\r\n")
+		partial := end < 0
+		if partial {
+			end = len(chunk)
+		}
+		limit := f.byteLimit()
+		if !f.started {
+			limit += 3
+		}
+		if end > limit-f.used-len(f.line) {
+			f.err = ErrEventTooLarge
+			break
+		}
+		if partial {
+			f.line = append(f.line, chunk...)
+			break
+		}
+		line := chunk[:end]
+		if len(f.line) != 0 {
+			line = append(f.line, line...)
+			f.line = line[:0]
+		}
+		f.skipLF = chunk[end] == '\r'
+		chunk = chunk[end+1:]
+		if event, ready := f.acceptLine(line); ready {
+			return event, true, chunk
+		}
+	}
+	return Event{}, false, nil
+}
+
+func (f *Framer) acceptLine(line []byte) (Event, bool) {
+	if !f.started {
+		line = bytes.TrimPrefix(line, []byte("\xef\xbb\xbf"))
+		f.started = true
+	}
+	if len(line) == 0 {
+		kind := f.kind
+		f.kind, f.used = "", 0
+		if f.data.Len() == 0 {
+			return Event{}, false
+		}
+		if kind == "" {
+			kind = "message"
+		}
+		event := Event{Type: kind, Data: strings.TrimSuffix(f.data.String(), "\n"), ID: f.id}
+		f.data.Reset()
+		return event, true
+	}
+	f.used += len(line) + 1
+	if f.used > f.byteLimit() {
+		f.err = ErrEventTooLarge
+		return Event{}, false
+	}
+	field, value, _ := strings.Cut(strings.ToValidUTF8(string(line), "\ufffd"), ":")
+	value = strings.TrimPrefix(value, " ")
+	switch field {
+	case "data":
+		f.data.WriteString(value)
+		f.data.WriteByte('\n')
+	case "event":
+		f.kind = value
+	case "id":
+		if !strings.ContainsRune(value, 0) {
+			f.id = value
+		}
+	}
+	return Event{}, false
 }

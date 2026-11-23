@@ -3,6 +3,7 @@ package sse
 import (
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -51,6 +52,7 @@ func TestDispatchRules(t *testing.T) {
 		{"unterminated block discarded", "data: partial\n", nil},
 		{"unterminated line discarded", "data: partial", nil},
 		{"utf8 replacement", "data: \xff\n\n", []Event{{Type: "message", Data: "\ufffd"}}},
+		{"mixed endings and BOM", "\ufeff: keepalive\r\nevent: delta\rdata: one\n\r\ndata: two\r\r", []Event{{Type: "delta", Data: "one"}, {Type: "message", Data: "two"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,6 +68,21 @@ func TestDispatchRules(t *testing.T) {
 			}
 			if got, err := d.Next(); !errors.Is(err, io.EOF) {
 				t.Fatalf("end = %#v, %v", got, err)
+			}
+			for split := 0; split <= len(tc.wire); split++ {
+				var f Framer
+				var got []Event
+				for _, chunk := range []string{tc.wire[:split], tc.wire[split:]} {
+					if err := f.Push([]byte(chunk), func(evt Event) error {
+						got = append(got, evt)
+						return nil
+					}); err != nil {
+						t.Fatalf("Push at byte %d: %v", split, err)
+					}
+				}
+				if !slices.Equal(got, tc.want) {
+					t.Fatalf("Push at byte %d = %#v, want %#v", split, got, tc.want)
+				}
 			}
 		})
 	}
@@ -86,6 +103,13 @@ func TestLimits(t *testing.T) {
 		}
 		if _, err := d.Next(); !errors.Is(err, ErrEventTooLarge) {
 			t.Fatalf("error must remain terminal: %v", err)
+		}
+		for split := 0; split <= len(wire); split++ {
+			f := Framer{limit: 16}
+			discard := func(Event) error { return nil }
+			if err := errors.Join(f.Push([]byte(wire[:split]), discard), f.Push([]byte(wire[split:]), discard)); !errors.Is(err, ErrEventTooLarge) {
+				t.Fatalf("Push at byte %d: %v", split, err)
+			}
 		}
 	}
 	// Limits reset between blocks, including blocks without data.

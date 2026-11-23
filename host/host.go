@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // Request is an HTTP request Core wants the client to send.
@@ -244,23 +246,11 @@ func ValidHeader(name, value string) error {
 	if name == "" {
 		return errors.New("empty header name")
 	}
-	for i := 0; i < len(name); i++ {
-		if !isTokenChar(name[i]) {
-			return fmt.Errorf("invalid header name %q", name)
-		}
+	if !httpguts.ValidHeaderFieldName(name) {
+		return fmt.Errorf("invalid header name %q", name)
 	}
-	for i := 0; i < len(value); i++ {
-		if c := value[i]; (c < 0x20 && c != '\t') || c == 0x7f {
-			return fmt.Errorf("invalid value for header %q", name)
-		}
+	if !httpguts.ValidHeaderFieldValue(value) {
+		return fmt.Errorf("invalid value for header %q", name)
 	}
 	return nil
-}
-
-func isTokenChar(c byte) bool {
-	switch {
-	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		return true
-	}
-	return strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
 }
