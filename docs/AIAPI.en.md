@@ -56,7 +56,6 @@ Ambiguous input is refused: two JSON values in one body, a repeated key in one o
 
 Routing policies — picking an account by difficulty, expiry or remaining quota — quota queries and content masking belong to **plugins**, not to this layer. Core provides the standard-protocol base and the extension mechanism; see [AI-CORE-BOUNDARY.en.md](AI-CORE-BOUNDARY.en.md).
 
-The older `magpierouting` package and `mobile.Magpie.PlanRoute` are an early hard-coded prototype. They are kept as reference for splitting, and are no longer the required path for a standard call.
 
 ## Not implemented yet
 

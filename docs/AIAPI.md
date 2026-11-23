@@ -56,7 +56,6 @@ Core 自带三种标准协议的请求构造:OpenAI Chat Completions、OpenAI Re
 
 路由策略(按难度、到期时间、额度挑账号)、配额查询、正文脱敏属于**插件**,不在这一层。Core 只提供标准协议的调用底座与扩展机制,见 [AI-CORE-BOUNDARY.md](AI-CORE-BOUNDARY.md)。
 
-旧的 `magpierouting` 与 `mobile.Magpie.PlanRoute` 是早期硬编码原型,保留供拆分参考,不再是标准调用的必经路径。
 
 ## 尚未实现
 

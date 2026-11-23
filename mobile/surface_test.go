@@ -27,7 +27,6 @@ var magpieSurface = []string{
 	"Close",
 	"LoadPackage",
 	"Models",
-	"PlanRoute",
 	"Poll",
 	"ReadPackageArchive",
 	"SavedAuth",

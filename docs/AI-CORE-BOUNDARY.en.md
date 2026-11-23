@@ -12,7 +12,7 @@ This document retains early design discussion; later not-yet-implemented phrases
 
 Adopt standard APIs built in and extensions provided by plugins, while keeping execution mechanisms in Core. Core supplies protocols, the plugin host and extension entry points. Plugins implement routing policies, provider quota queries, content masking and related features. Standard OpenAI/Anthropic API-key calls must work without installing extension packages.
 
-Existing `magpierouting` and `mobile.Magpie.PlanRoute` are hard-coded policy prototypes, not a host compatible with Magpie routing plugins. Do not expand them into mandatory built-in scheduling. Retain their source/tests for later separation; removal of exported methods or files requires separate compatibility and deletion handling.
+Future routing policies should preserve unknown quota, honor explicit model selection, and produce reproducible ordering for the same candidates, policy inputs and state snapshot.
 
 ## Trade-offs between three designs
 
@@ -36,7 +36,7 @@ Pluginisation reduces future business coupling, not necessarily initial implemen
 | Request lifecycle and strategy entry points | Core calls plugins, validates their output and executes the final selection | No full pipeline yet; extension points need distinct designs |
 | Raw token usage and request events | Analytics plugins need factual inputs | Some usage parsing exists, not an account-balance service or full analytics |
 | URL/header validation, credential scope and secret scrubbing in logs | Missing an optional content-masking plugin must not leak API keys | Some isolation/validation exists; new standard paths also need coverage |
-| gomobile JSON surface | iOS calls standard APIs and extensions through one boundary | Provider and prototype routing bridges exist; standard API/extension bridges remain |
+| gomobile JSON surface | iOS calls standard APIs and extensions through one boundary | Standard API and provider bridges exist. General extension hooks are pending. |
 
 Built-in APIs construct requests and parse replies. iOS URLSession still opens connections, while Keychain, login UI, package storage, persistent statistics and UI remain client responsibilities. Core neither opens connections nor persists secrets. API keys do not imply website subscription accounts or OAuth access.
 
@@ -71,7 +71,6 @@ Bundling existing `testdata/*-compatible` templates must not be called the built
 | `magpieplugin` package/module/auth/streaming foundation | Reuse, isolated from comic plugins |
 | Chat/Responses/Messages encoding/decoding | Extract or reuse as protocol infrastructure; complete structured messages/events |
 | OpenAI/Anthropic templates | Keep as fixtures/references, not mandatory product packages |
-| `magpierouting` / `PlanRoute` | Retain as prototypes; separate infrastructure checks from policies later, without claiming plugin compatibility |
 | Swift routing wrapper/policy storage task | Review any patch first; stop expanding mandatory built-in policies until extension APIs define the final entry point |
 | Copilot simulator validation | Continue testing in-app non-standard provider plugins, Keychain, login and streaming, independent of desktop Magpie |
 | Desktop | Connect to installed Magpie, independently of the iOS implementation |
