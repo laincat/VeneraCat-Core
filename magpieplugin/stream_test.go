@@ -150,24 +150,6 @@ func TestUnreadableEventIsAnError(t *testing.T) {
 	}
 }
 
-func TestRetryIsRefusedOnceOutputStarted(t *testing.T) {
-	attempt := &Attempt{}
-	if err := attempt.MayRetry(); err != nil {
-		t.Fatalf("a silent attempt must be retryable: %v", err)
-	}
-	attempt.Saw(Event{Kind: EventText, Text: "你"})
-	if err := attempt.MayRetry(); !errors.Is(err, ErrNoRetryAfterOutput) {
-		t.Fatalf("retry after output = %v", err)
-	}
-	// An empty delta is not output; it must not lock the attempt.
-	silent := &Attempt{}
-	silent.Saw(Event{Kind: EventText, Text: ""})
-	silent.Saw(Event{Kind: EventDone})
-	if err := silent.MayRetry(); err != nil {
-		t.Fatalf("silent attempt not retryable: %v", err)
-	}
-}
-
 func TestLargeTokenCountsStayExact(t *testing.T) {
 	wire := "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9007199254740993}}\n\n"
 	events := drain(t, wire, DialectChat)

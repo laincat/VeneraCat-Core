@@ -19,7 +19,7 @@
 | `loader` + `fetch` | 请求穿过插件自己的 fetch(它负责刷新与鉴权) | 原始包:先 `/copilot_internal/v2/token` 再 `/chat/completions` |
 | 流式回复 | `ReadableStream` 分块 + 三种方言归一;没实现 `Streamer` 时整段文本走同一解析器。**包自己声明方言**:loader 返回 `dialect`(`chat`/`responses`/`messages`)、可选 `path` 与 `headers` —— 所以 Anthropic 形态的供应商不需要宿主认识它,只要说清自己说什么方言 | 分块、跨分块多字节字符;`TestAnthropicTemplateStreamsMessages` 走 `/messages` + `x-api-key` |
 | 取消 | 每次 fetch 独立取消;读者放弃时传输停止 | 阻塞 host + `ctx.Done()` |
-| 重试策略 | 未输出可换账号,已输出即 `ErrNoRetryAfterOutput` | 空 delta 重试 / 有文本后不重试 |
+| 重试策略 | 宿主通过已选中的插件发送一次对话请求 | 流式首块与调用方取消 |
 | 模型列表 | `GET <baseURL>/models`,认 `data` 与 `models` 两种形状 | 原始包 + 假服务;404 时明确报错 |
 
 ## 明确不支持(会直说,不会退化成空桩)
@@ -33,7 +33,7 @@
 | 多账号 | 一个 provider 一个账号;Magpie 的 `provider#suffix` 多键未实现 |
 | 签到定时循环 | 只有手动触发,没有「每天一次」的调度 |
 | 验证码 | 不解决;`captcha` 时让用户去供应商自己的 App |
-| 网关翻译/路由策略 | 不做 Magpie 完整网关;账号选择与重试由客户端按 `Sender` 的两条规则决定 |
+| 网关翻译与路由策略 | 由未来的策略扩展实现 |
 
 ## 社区包的逐个走查(2026-10-31)
 

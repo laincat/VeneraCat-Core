@@ -214,7 +214,7 @@ chunk 是字节(Uint8Array),多字节字符跨块也能正确解码
 Copilot 原包的 `options.fetch` 也实测过:它重写鉴权头之后,流仍然逐块到达
 (`data: one` / `data: two` / `data: [DONE]`),说明包装没有把流压平。
 
-协议解析与重试策略也补上了:插件说什么方言,客户端拿到的都是同一组事件。
+插件声明协议方言，客户端收到统一的事件。
 
 ```
 DialectChat       choices[0].delta.content → text;finish_reason → done
@@ -224,23 +224,7 @@ error             vendor 在 200 里报的错成为 EventError,不是被吞掉
 usage             保留原文与 json.Number,9007199254740993 不会变成浮点
 ```
 
-`Attempt` 记录「是否已经把内容给用户看过」,`MayRetry()` 在已输出后返回
-`ErrNoRetryAfterOutput`;空的 delta、done、vendor 错误都不算输出,不会误锁重试。
-
-路由也补上了:`Sender.Send` 按顺序给一批 endpoint(body 按各自方言编码),失败的处理分两种。
-
-```
-没输出过      换下一个 endpoint —— 密钥过期、额度用完,正是第二个账号的用处
-已经输出过    ErrNoRetryAfterOutput,不再往下试 —— 重试只会重复或自相矛盾
-空 delta/done 不算输出,所以「流开了但一个字没来」仍然可以重试
-调用方主动停  errStopStream 直接回传,不去试别的 endpoint
-全都失败      RouteError 里带上试过哪几个
-```
-
-流式那半边有个真实的坑:客户端实现 `Streamer` 时,我们用 `io.Pipe` 把分块喂给
-`StreamReader`。读者读到 `[DONE]` 就正常结束了,但 vendor 可能还在写 —— 于是写端
-拿到 `io.ErrClosedPipe`。第一版把它当成传输错误,导致「明明成功了却报错」,现在把
-这种情况和在读者已经结束后的关闭管道视为正常,而读者自己放弃时的错误优先返回。
+路由与故障转移由策略扩展决定。首个输出交给调用方后，宿主不得隐式重试或切换端点。调用方取消时立即结束该次请求。
 
 一个容易踩的点也写进了测试:SSE 的最后一块必须有自己的空行,否则按规范
 被丢弃——我第一版测试就少了它,导致 `response.completed` 静默消失。

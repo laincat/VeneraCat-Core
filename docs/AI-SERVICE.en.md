@@ -250,8 +250,7 @@ Copilot's own `options.fetch` was checked as well: after it rewrites the auth
 headers, the stream still arrives in pieces (`data: one`, `data: two`,
 `data: [DONE]`), so the wrapper does not flatten it.
 
-Protocol parsing and the retry policy are in place: whichever dialect a package
-speaks, the client receives the same small set of events.
+The package declares its protocol dialect and the client receives a common set of events.
 
 ```
 DialectChat       choices[0].delta.content → text; finish_reason → done
@@ -261,28 +260,7 @@ error             a vendor error inside a 200 becomes EventError, not silence
 usage             raw JSON kept with json.Number, so 9007199254740993 survives
 ```
 
-`Attempt` records whether the reader has been shown anything; `MayRetry()`
-returns `ErrNoRetryAfterOutput` once it has. An empty delta, a done event or a
-vendor error does not count as output, so none of them locks retrying by mistake.
-
-Routing is in place too: `Sender.Send` walks a list of endpoints (encoding the body in
-each one's dialect) and treats failures differently depending on what the reader has seen.
-
-```
-nothing shown yet   try the next endpoint — an expired key or an empty quota is exactly
-                    what a second account is for
-text already shown  ErrNoRetryAfterOutput, and no further endpoint — a retry would repeat
-                    or contradict what the reader read
-empty delta / done  not output, so "the stream opened but said nothing" is still retryable
-caller stopped      errStopStream comes back as is; no other endpoint runs
-all failed          RouteError names the endpoints that were tried
-```
-
-The streaming half hid a real trap: when the client implements `Streamer`, an `io.Pipe`
-feeds the decoder. The reader finishes on `[DONE]`, but the vendor may still be writing, so
-the writer gets `io.ErrClosedPipe`. The first version reported that as a transport failure —
-"it worked, but it said it failed". Now a closed pipe after the reader is done counts as
-normal, while a reader that gave up still wins with its own error.
+Policy extensions decide routing and failover. Once the first output reaches the caller, the host must never retry implicitly or switch endpoints. Caller cancellation ends the request.
 
 One trap is now pinned by a test: the final SSE block needs its own blank line or
 the spec discards it — the first version of that test omitted it, and

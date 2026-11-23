@@ -120,14 +120,3 @@ client, the sign-in UI, Keychain and transport pass the macOS type checks and un
 from you, or you tapping through it once. **If it had stayed open**: the honest claim is "implemented",
 not "works"; and a community package's real behaviour — rate limits, second factors, regional
 restrictions — stays unknown.
-
-## 7. `magpieplugin.Sender` has no production caller yet
-
-**Where it stands**: `Sender` — endpoint walking, the retry decision, the `Pin` — has a full set of tests, and **nothing in this repository calls it in production**: `mobile` chats through the plugin package's own `Host.HTTP`, and the desktop talks to the Magpie desktop app rather than through `magpieplugin`. So the retry decision and the pin are, today, a **library surface for a host**, not a live protection.
-
-**Why it needs a decision**: three directions, with different costs —
-A. **Let `mobile` use `Sender` when a package offers several endpoints** (mirrors or a second account); this changes the package contract;
-B. **Use it inside the desktop's Magpie gateway**, which does route — that work lands in the desktop repository;
-C. **Keep it as a library surface and say so**, which is what the documentation does now.
-
-**If left open**: nothing breaks, but it would be wrong to claim retries are constrained — that is code with tests, not code in the path.

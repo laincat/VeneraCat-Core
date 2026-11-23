@@ -19,7 +19,7 @@ Updated 2026-10-31. "Compatible" here means **actually run**, not "its JavaScrip
 | `loader` + `fetch` | requests go through the package's own fetch (it refreshes and authenticates) | original package: `/copilot_internal/v2/token` then `/chat/completions` |
 | Streamed replies | `ReadableStream` chunks, normalised across three dialects; a client without `Streamer` hands the reply over whole to the same parser. **The package declares its dialect**: the loader returns `dialect` (`chat`/`responses`/`messages`) plus optional `path` and `headers`, so an Anthropic-shaped vendor needs no knowledge of it in the host | chunking, multi-byte characters across chunks; `TestAnthropicTemplateStreamsMessages` goes to `/messages` with `x-api-key` |
 | Cancellation | each fetch cancels independently; a reader that gives up stops the transport | a blocking host plus `ctx.Done()` |
-| Retry policy | nothing shown yet → another account is allowed; anything shown → `ErrNoRetryAfterOutput` | empty-delta retry and no-retry-after-text |
+| Retry policy | the host sends one conversation request through the selected plugin | first streamed chunk and caller cancellation |
 | Model list | `GET <baseURL>/models`, accepting both `data` and `models` | the original package and a fake service; a 404 is reported plainly |
 
 ## Explicitly unsupported (said plainly, never an empty stub)
@@ -33,7 +33,7 @@ Updated 2026-10-31. "Compatible" here means **actually run**, not "its JavaScrip
 | Multiple accounts | one account per provider; Magpie's `provider#suffix` keys are not implemented |
 | A scheduled check-in loop | manual trigger only; nothing runs "once a day" |
 | Captchas | never solved; on `captcha` the user finishes in the vendor's own app |
-| Gateway translation and routing strategy | this is not Magpie's full gateway; account choice and retries follow the two `Sender` rules |
+| Gateway translation and routing strategy | planned for policy extensions |
 
 ## The community packages, one by one (2026-10-31)
 
