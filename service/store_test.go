@@ -2,8 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -131,5 +135,136 @@ func TestInstalledPackageFallsBackToTheManifest(t *testing.T) {
 	}
 	if rec.ID != "demo" || rec.Version != "1" {
 		t.Fatalf("record = %+v", rec)
+	}
+}
+
+func TestServiceUpgradeMigratesStorage(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	first := buildZip(t, map[string]string{ManifestFileName: strings.Replace(zipManifest, `"version":"1"`, `"version":"1.0.0"`, 1), "index.mjs": "export function handle() { return 1; }"})
+	installed, err := InstallPackage(ctx, dir, "a", "", first)
+	if err != nil || installed.Version != "1.0.0" {
+		t.Fatalf("install: %+v, %v", installed, err)
+	}
+	legacy := filepath.Join(PackageDir(dir, "demo"), "storage.json")
+	if err := os.WriteFile(legacy, []byte(`{"old":"kept"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second := buildZip(t, map[string]string{ManifestFileName: strings.Replace(zipManifest, `"version":"1"`, `"version":"2.0.0"`, 1), "index.mjs": "export function handle() { return 2; }"})
+	installed, err = InstallPackage(ctx, dir, "b", "", second)
+	if err != nil || installed.Version != "2.0.0" {
+		t.Fatalf("upgrade: %+v, %v", installed, err)
+	}
+	store, err := OpenStorage(dir, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RemovePackage(dir, "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if value, found, err := store.Get(ctx, "old"); err != nil || !found || value != "kept" {
+		t.Fatalf("storage after upgrade and removal = %q, %v, %v", value, found, err)
+	}
+}
+
+func TestServiceStorageResumesMigration(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	packageDir := PackageDir(dir, "demo")
+	if err := os.MkdirAll(packageDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(packageDir, "storage.json")
+	if err := os.WriteFile(legacy, []byte(`{"legacy":"kept","shared":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(packageDir+".json", []byte(`{"shared":"new"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		store, err := OpenStorage(dir, "demo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for key, want := range map[string]string{"shared": "new", "legacy": "kept"} {
+			if got, found, err := store.Get(ctx, key); err != nil || !found || got != want {
+				t.Fatalf("Get(%q) = %q, %v, %v", key, got, found, err)
+			}
+		}
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy storage remains: %v", err)
+	}
+}
+
+func TestServiceStorageConcurrentWrites(t *testing.T) {
+	dir := t.TempDir()
+	var writes sync.WaitGroup
+	for index := range 20 {
+		writes.Go(func() {
+			store, err := OpenStorage(dir, "demo")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err := store.Set(context.Background(), fmt.Sprint(index), "kept"); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	writes.Wait()
+	values, err := readStorage(PackageDir(dir, "demo") + ".json")
+	if err != nil || len(values) != 20 {
+		t.Fatalf("storage = %v, %v", values, err)
+	}
+}
+
+func TestConcurrentServiceInstalls(t *testing.T) {
+	dir := t.TempDir()
+	var installs sync.WaitGroup
+	for index := range 12 {
+		id := fmt.Sprintf("demo-%d", index)
+		archive := buildZip(t, map[string]string{ManifestFileName: strings.Replace(zipManifest, "demo", id, 1), "index.mjs": "export function handle() {}"})
+		installs.Go(func() {
+			if _, err := InstallPackage(context.Background(), dir, "", "", archive); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	installs.Wait()
+	if records, err := InstalledPackages(dir); err != nil || len(records) != 12 {
+		t.Fatalf("install records = %v, %v", records, err)
+	}
+}
+
+func TestServiceInstallRestoresPreviousPackage(t *testing.T) {
+	ctx := context.Background()
+	for _, failure := range []string{"package", "index"} {
+		t.Run(failure, func(t *testing.T) {
+			dir := t.TempDir()
+			first := buildZip(t, map[string]string{ManifestFileName: zipManifest, "index.mjs": "export function handle() { return 1; }"})
+			if _, err := InstallPackage(ctx, dir, "first", "", first); err != nil {
+				t.Fatal(err)
+			}
+			second := buildZip(t, map[string]string{ManifestFileName: strings.Replace(zipManifest, `"version":"1"`, `"version":"2.0.0"`, 1), "index.mjs": "export function handle() { return 2; }"})
+			injected := errors.New("injected rename error")
+			rename := func(from, to string) error {
+				if failure == "package" && to == PackageDir(dir, "demo") && strings.HasPrefix(filepath.Base(filepath.Dir(from)), ".install-") ||
+					failure == "index" && to == indexPath(dir) {
+					return injected
+				}
+				return os.Rename(from, to)
+			}
+			if _, err := installPackage(ctx, dir, "second", "", second, rename); !errors.Is(err, injected) {
+				t.Fatalf("install returned %v", err)
+			}
+			manifest, source, err := ReadInstalledPackage(dir, "demo")
+			if err != nil || manifest.Version != "1" || !strings.Contains(source, "return 1") {
+				t.Fatalf("previous package = %+v, %q, %v", manifest, source, err)
+			}
+			if record, err := InstalledPackage(dir, "demo"); err != nil || record.Origin != "first" {
+				t.Fatalf("previous record = %+v, %v", record, err)
+			}
+		})
 	}
 }

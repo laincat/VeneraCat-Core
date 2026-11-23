@@ -8,9 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 )
+
+var installLocks keyedLocks
 
 // Installed describes a service package on disk.
 type Installed struct {
@@ -34,6 +35,10 @@ type Installed struct {
 // Account values are not part of this: a client owns its credentials, and Core
 // only keeps the code.
 func InstallPackage(ctx context.Context, dataDir, origin, digest string, archive []byte) (*Installed, error) {
+	return installPackage(ctx, dataDir, origin, digest, archive, os.Rename)
+}
+
+func installPackage(ctx context.Context, dataDir, origin, digest string, archive []byte, rename func(string, string) error) (*Installed, error) {
 	manifest, source, files, err := ReadPackageZip(archive)
 	if err != nil {
 		return nil, err
@@ -42,15 +47,21 @@ func InstallPackage(ctx context.Context, dataDir, origin, digest string, archive
 		return nil, err
 	}
 	dir := PackageDir(dataDir, manifest.ID)
-	tmp := dir + ".new"
-	if err := os.RemoveAll(tmp); err != nil {
+	parent := filepath.Dir(dir)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return nil, err
 	}
+	tmp, err := os.MkdirTemp(parent, ".install-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	staged := filepath.Join(tmp, "package")
 	for name, content := range files {
 		if err := ValidFilePath(name); err != nil {
 			return nil, err
 		}
-		path := filepath.Join(tmp, filepath.FromSlash(name))
+		path := filepath.Join(staged, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, err
 		}
@@ -58,18 +69,12 @@ func InstallPackage(ctx context.Context, dataDir, origin, digest string, archive
 			return nil, err
 		}
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(tmp, dir); err != nil {
-		return nil, err
-	}
 	rec := &Installed{
 		ID: manifest.ID, Name: manifest.Name, Version: manifest.Version,
 		Origin: origin, SHA256: digest, Installed: time.Now().UTC(), Dir: dir,
 		Permissions: append([]Permission(nil), manifest.Permissions...),
 	}
-	if err := writeInstallRecord(dataDir, rec); err != nil {
+	if err := changePackage(dataDir, manifest.ID, staged, rec, rename); err != nil {
 		return nil, err
 	}
 	return rec, nil
@@ -91,6 +96,7 @@ func PackageDir(dataDir, id string) string {
 
 // InstalledPackages lists what is installed, ordered by id.
 func InstalledPackages(dataDir string) ([]Installed, error) {
+	defer installLocks.lock(absoluteDir(dataDir))()
 	records, err := readInstallRecords(dataDir)
 	if err != nil {
 		return nil, err
@@ -108,6 +114,7 @@ func InstalledPackage(dataDir, id string) (*Installed, error) {
 	if err := validID(id); err != nil {
 		return nil, err
 	}
+	defer installLocks.lock(absoluteDir(dataDir))()
 	if _, err := os.Stat(filepath.Join(PackageDir(dataDir, id), ManifestFileName)); err != nil {
 		return nil, fmt.Errorf("service: %s is not installed: %w", id, err)
 	}
@@ -134,31 +141,97 @@ func ReadInstalledPackage(dataDir, id string) (*Manifest, string, error) {
 	if err := validID(id); err != nil {
 		return nil, "", err
 	}
+	defer installLocks.lock(absoluteDir(dataDir))()
 	return ReadPackage(PackageDir(dataDir, id))
 }
 
-// RemovePackage deletes an installed service.
+// RemovePackage deletes an installed service and retains its ordinary storage.
 func RemovePackage(dataDir, id string) error {
-	if err := validID(id); err != nil {
+	return changePackage(dataDir, id, "", nil, os.Rename)
+}
+
+func changePackage(dataDir, id, staged string, record *Installed, rename func(string, string) error) error {
+	storage, err := OpenStorage(dataDir, id)
+	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(PackageDir(dataDir, id), ManifestFileName)); err != nil {
-		return fmt.Errorf("service: %s is not installed: %w", id, err)
-	}
-	if err := os.RemoveAll(PackageDir(dataDir, id)); err != nil {
+	defer installLocks.lock(storage.dir)()
+	defer storage.lock()()
+	dir := PackageDir(dataDir, id)
+	info, err := os.Stat(dir)
+	switch {
+	case err == nil && !info.IsDir():
+		return fmt.Errorf("service: package path %s is occupied by a file", dir)
+	case staged == "":
+		if _, err := os.Stat(filepath.Join(dir, ManifestFileName)); err != nil {
+			return fmt.Errorf("service: %s is not installed: %w", id, err)
+		}
+	case err != nil && !os.IsNotExist(err):
 		return err
+	}
+	exists := info != nil
+	if exists {
+		if _, err := storage.load(); err != nil {
+			return err
+		}
 	}
 	records, err := readInstallRecords(dataDir)
 	if err != nil {
 		return err
 	}
-	delete(records, id)
-	return writeInstallRecords(dataDir, records)
+	if record == nil {
+		delete(records, id)
+	} else {
+		records[id] = *record
+	}
+	index, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		return err
+	}
+	backup, err := os.MkdirTemp(filepath.Dir(dir), ".previous-*")
+	if err != nil {
+		return err
+	}
+	previous := filepath.Join(backup, "package")
+	keepBackup := false
+	defer func() {
+		if !keepBackup {
+			os.RemoveAll(backup)
+		}
+	}()
+	if exists {
+		if err := rename(dir, previous); err != nil {
+			return err
+		}
+	}
+	restore := func(cause error) error {
+		if exists {
+			if err := rename(previous, dir); err != nil {
+				keepBackup = true
+				return errors.Join(cause, fmt.Errorf("service: previous package remains at %s: %w", previous, err))
+			}
+		}
+		return cause
+	}
+	if staged != "" {
+		if err := rename(staged, dir); err != nil {
+			return restore(err)
+		}
+	}
+	if err := writeAtomic(indexPath(dataDir), index, rename); err != nil {
+		if staged != "" {
+			if moveErr := os.RemoveAll(dir); moveErr != nil {
+				err = errors.Join(err, moveErr)
+			}
+		}
+		return restore(err)
+	}
+	return nil
 }
 
 // validID keeps an id usable as a directory name.
 func validID(id string) error {
-	if id == "" || strings.ContainsAny(id, `/\`) || strings.HasPrefix(id, ".") {
+	if !idPattern.MatchString(id) {
 		return fmt.Errorf("service: %q is not a valid service id", id)
 	}
 	return nil
@@ -185,34 +258,10 @@ func readInstallRecords(dataDir string) (map[string]Installed, error) {
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, fmt.Errorf("service: the install index %s is corrupt: %w", indexPath(dataDir), err)
 	}
+	if out == nil {
+		out = make(map[string]Installed)
+	}
 	return out, nil
-}
-
-// writeInstallRecord adds or replaces one record.
-func writeInstallRecord(dataDir string, rec *Installed) error {
-	records, err := readInstallRecords(dataDir)
-	if err != nil {
-		return err
-	}
-	records[rec.ID] = *rec
-	return writeInstallRecords(dataDir, records)
-}
-
-// writeInstallRecords writes the whole index through a temporary file.
-func writeInstallRecords(dataDir string, records map[string]Installed) error {
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(records, "", "  ")
-	if err != nil {
-		return err
-	}
-	path := indexPath(dataDir)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }
 
 // ErrNotInstalled reports a package that is not on disk.

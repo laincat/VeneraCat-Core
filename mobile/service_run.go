@@ -7,8 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -22,7 +20,7 @@ import (
 // Core does not ship a transport of its own to a phone: the client already has
 // one, with its cookies, its proxy and its certificate decisions. So the entry
 // here takes that client's Host and builds the service's host from it: the HTTP
-// a service makes goes out through `Host.HTTP`, storage lives under the package
+// a service makes goes out through `Host.HTTP`, storage lives beside the package
 // directory, and account values are refused because a service's secrets belong
 // to the client that stores them.
 //
@@ -36,7 +34,7 @@ type serviceRunner struct {
 
 var serviceRunners = &serviceRunner{sup: map[string]*service.Supervisor{}}
 
-func (r *serviceRunner) supervisor(client Host, dataDir, granted string, dir string, secrets map[string]string) (*service.Supervisor, error) {
+func (r *serviceRunner) supervisor(client Host, dataDir, granted string, secrets map[string]string) (*service.Supervisor, error) {
 	allowed, err := parsePermissions(granted)
 	if err != nil {
 		return nil, err
@@ -55,21 +53,19 @@ func (r *serviceRunner) supervisor(client Host, dataDir, granted string, dir str
 			Fetch: func(ctx context.Context, raw string) (string, error) {
 				return fetchThroughClient(ctx, client, id, raw)
 			},
-			StorageGet: func(_ context.Context, k string) (string, bool, error) {
-				store, err := readServiceStorage(dir, id)
+			StorageGet: func(ctx context.Context, k string) (string, bool, error) {
+				store, err := service.OpenStorage(dataDir, id)
 				if err != nil {
 					return "", false, err
 				}
-				v, ok := store[k]
-				return v, ok, nil
+				return store.Get(ctx, k)
 			},
-			StorageSet: func(_ context.Context, k, v string) error {
-				store, err := readServiceStorage(dir, id)
+			StorageSet: func(ctx context.Context, k, v string) error {
+				store, err := service.OpenStorage(dataDir, id)
 				if err != nil {
 					return err
 				}
-				store[k] = v
-				return writeServiceStorage(dir, id, store)
+				return store.Set(ctx, k, v)
 			},
 			// A phone's account values live in its own keychain; Core has no
 			// way to read them and says so rather than pretending they are
@@ -122,7 +118,7 @@ func ServiceCallWithSecrets(client Host, dataDir, id, method, payload, granted, 
 	if err != nil {
 		return "", err
 	}
-	sup, err := serviceRunners.supervisor(client, dataDir, granted, filepath.Join(dataDir, "services"), secrets)
+	sup, err := serviceRunners.supervisor(client, dataDir, granted, secrets)
 	if err != nil {
 		return "", err
 	}
@@ -185,7 +181,7 @@ func ServiceDescribe(client Host, dataDir, id, granted string) (_ string, err er
 	if client == nil {
 		return "", fmt.Errorf("mobile: ServiceDescribe needs a host for its network")
 	}
-	sup, err := serviceRunners.supervisor(client, dataDir, granted, filepath.Join(dataDir, "services"), nil)
+	sup, err := serviceRunners.supervisor(client, dataDir, granted, nil)
 	if err != nil {
 		return "", err
 	}
@@ -284,41 +280,3 @@ func fetchThroughClient(ctx context.Context, client Host, id, rawURL string) (st
 }
 
 var serviceRequestSeq atomic.Int64
-
-func serviceStoragePath(dir, id string) string {
-	return filepath.Join(dir, id, "storage.json")
-}
-
-func readServiceStorage(dir, id string) (map[string]string, error) {
-	raw, err := os.ReadFile(serviceStoragePath(dir, id))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return map[string]string{}, nil
-		}
-		return nil, err
-	}
-	out := map[string]string{}
-	if len(raw) == 0 {
-		return out, nil
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("service: storage for %q is unreadable: %v", id, err)
-	}
-	return out, nil
-}
-
-func writeServiceStorage(dir, id string, store map[string]string) error {
-	path := serviceStoragePath(dir, id)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	raw, err := json.Marshal(store)
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
