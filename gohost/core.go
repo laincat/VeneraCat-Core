@@ -400,6 +400,14 @@ func (c *Core) SearchOptions(ctx context.Context, key string) ([]SearchOptionGro
 	return rt.SearchOptions(ctx, key)
 }
 
+func (c *Core) LoadSourceSetting(key, setting string) (json.RawMessage, bool, error) {
+	return c.store.LoadSetting(key, setting)
+}
+
+func (c *Core) SaveSourceSetting(key, setting string, value json.RawMessage) error {
+	return c.store.SaveSetting(key, setting, value)
+}
+
 // DefaultOptions is one value per search group: the group's default, which
 // search.load expects.
 func (c *Core) DefaultOptions(ctx context.Context, key string) ([]string, error) {

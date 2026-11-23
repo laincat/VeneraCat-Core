@@ -39,6 +39,9 @@ func (r *Registry) InstallFromComicIndex(ctx context.Context, indexURL string, e
 
 // InstallExpecting installs a plugin with the declared key and optional digest.
 func (r *Registry) InstallExpecting(ctx context.Context, wantKey string, typ Type, body, origin, indexURL, sha string) (*Record, error) {
+	if wantKey == "" {
+		return r.Install(ctx, typ, body, origin, indexURL, sha)
+	}
 	return r.installExpecting(ctx, wantKey, typ, body, origin, indexURL, sha, attribution.Info{})
 }
 

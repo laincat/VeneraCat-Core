@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -112,5 +113,29 @@ func TestConcurrentInstallsAndSourceWritesSurviveReopen(t *testing.T) {
 	values, err := reopened.Store().AllData("shared")
 	if err != nil || len(values) != 8 {
 		t.Fatalf("restored %d values: %v", len(values), err)
+	}
+}
+
+func TestDigestVerifiedCollectionWithoutKeyCanUpdate(t *testing.T) {
+	ctx := context.Background()
+	c, err := core.Open(core.Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	lib := New(c)
+	for _, version := range []string{"1", "2"} {
+		body := fixtureSource("comic", version)
+		digest := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))
+		rec, err := lib.InstallExpecting(ctx, "", plugin.TypeComic, body, "collection", digest)
+		if err != nil || rec.Version != version {
+			t.Fatalf("version %s: %+v %v", version, rec, err)
+		}
+	}
+	if _, err := lib.InstallExpecting(ctx, "", plugin.TypeComic, fixtureSource("comic", "3"), "collection", "wrong-digest"); !errors.Is(err, plugin.ErrChecksum) {
+		t.Fatalf("checksum: %v", err)
+	}
+	if rec, _ := c.Record("comic"); rec.Version != "2" {
+		t.Fatalf("checksum failure changed the source: %+v", rec)
 	}
 }

@@ -113,6 +113,11 @@ func (l *Library) InstallExpecting(ctx context.Context, key string, typ plugin.T
 	}
 	rec, err := l.core.InstallExpecting(ctx, key, typ, body, origin, "", digest)
 	if err != nil {
+		if key == "" {
+			if existing := keyOf(err); existing != "" && l.IsInstalled(existing) {
+				return l.replaceTypedLocked(ctx, existing, typ, body, origin, "", digest, true)
+			}
+		}
 		return nil, err
 	}
 	return l.persistInstalled(ctx, rec)
