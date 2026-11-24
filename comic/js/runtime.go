@@ -30,6 +30,26 @@ var videoPrelude string
 //go:embed novel-prelude.js
 var novelPrelude string
 
+type kindPreludeSpec struct{ name, src string }
+
+var (
+	kindPreludesMu sync.RWMutex
+	kindPreludes   = map[Kind][]kindPreludeSpec{}
+)
+
+// RegisterKindPrelude registers a prelude script that runs only in engines
+// created for the given source kind.
+func RegisterKindPrelude(kind Kind, name, src string) {
+	kindPreludesMu.Lock()
+	defer kindPreludesMu.Unlock()
+	for _, p := range kindPreludes[kind] {
+		if p.name == name {
+			return
+		}
+	}
+	kindPreludes[kind] = append(kindPreludes[kind], kindPreludeSpec{name: name, src: src})
+}
+
 // ErrClosed is returned after Close.
 var ErrClosed = errors.New("js: runtime closed")
 
@@ -38,7 +58,8 @@ type Runtime struct {
 	opts Options
 	svc  Services
 	// preludes are compiled once and run in every new engine.
-	preludes []*moejs.Script
+	preludes    []*moejs.Script
+	kindScripts map[Kind][]*moejs.Script
 
 	// ctx ends at Close and cancels every engine's host work.
 	ctx    context.Context
@@ -64,7 +85,7 @@ func New(opts Options, svc Services) (*Runtime, error) {
 	if svc.Log == nil {
 		svc.Log = func(string, string, string) {}
 	}
-	r := &Runtime{opts: opts, svc: svc, sources: map[string]Meta{}, engines: map[string]*engine{}}
+	r := &Runtime{opts: opts, svc: svc, sources: map[string]Meta{}, engines: map[string]*engine{}, kindScripts: map[Kind][]*moejs.Script{}}
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 	// Challenge handling is always on: without a verifier the wrapper still
 	// recognises Cloudflare pages and reports them as ErrChallengeRequired,
@@ -91,6 +112,18 @@ func New(opts Options, svc Services) (*Runtime, error) {
 			return nil, fmt.Errorf("js: novel prelude: %w", err)
 		}
 		r.preludes = append(r.preludes, np)
+		kindPreludesMu.RLock()
+		for k, specs := range kindPreludes {
+			for _, sp := range specs {
+				sc, err := moejs.CompileScript(sp.name, sp.src)
+				if err != nil {
+					kindPreludesMu.RUnlock()
+					return nil, fmt.Errorf("js: %s prelude %s: %w", k, sp.name, err)
+				}
+				r.kindScripts[k] = append(r.kindScripts[k], sc)
+			}
+		}
+		kindPreludesMu.RUnlock()
 	}
 	r.global, err = r.newEngine("", "global", nil)
 	if err != nil {

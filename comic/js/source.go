@@ -150,7 +150,7 @@ func (r *Runtime) loadSource(ctx context.Context, source, replacing string, insp
 	if err != nil {
 		return Meta{}, err
 	}
-	e, err := r.newEngine("", "pending", newScratchStorage())
+	e, err := r.newEngineForKind(kind, "", "pending", newScratchStorage())
 	if err != nil {
 		return Meta{}, err
 	}

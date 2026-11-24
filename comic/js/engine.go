@@ -62,6 +62,10 @@ type engine struct {
 
 // newEngine creates an engine and runs the preludes on it.
 func (r *Runtime) newEngine(key, partition string, storage SourceStorage) (*engine, error) {
+	return r.newEngineForKind("", key, partition, storage)
+}
+
+func (r *Runtime) newEngineForKind(kind Kind, key, partition string, storage SourceStorage) (*engine, error) {
 	e := &engine{mgr: r, key: key, partition: partition, storage: storage,
 		html: html.NewStore(), image: image.NewStore(image.Limits{})}
 	e.ctx, e.cancel = context.WithCancel(r.ctx)
@@ -83,7 +87,11 @@ func (r *Runtime) newEngine(key, partition string, storage SourceStorage) (*engi
 	if err := e.rt.SetGlobal("appVersion", r.svc.Env.AppVersion); err != nil {
 		return nil, err
 	}
-	for _, p := range r.preludes {
+	allPreludes := r.preludes
+	if extra := r.kindScripts[kind]; len(extra) > 0 {
+		allPreludes = append(append([]*moejs.Script(nil), r.preludes...), extra...)
+	}
+	for _, p := range allPreludes {
 		if _, err := e.rt.RunScript(p); err != nil {
 			return nil, fmt.Errorf("js: prelude: %w", err)
 		}
