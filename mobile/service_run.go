@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -211,6 +212,9 @@ func serviceHostFor(client Host, dir, id string) service.Host {
 		Fetch: func(ctx context.Context, raw string) (string, error) {
 			return fetchThroughClient(ctx, client, id, raw)
 		},
+		FetchRequest: func(ctx context.Context, req service.FetchRequest) (*service.FetchResponse, error) {
+			return fetchRequestThroughClient(ctx, client, id, req)
+		},
 		StorageGet: storage.Get,
 		StorageSet: storage.Set,
 		Secret: func(ctx context.Context, key string) (string, error) {
@@ -340,21 +344,81 @@ func parsePermissions(granted string) ([]service.Permission, error) {
 	return slices.Compact(out), nil
 }
 
-// fetchThroughClient asks the client's Host for one URL and returns the body.
+// fetchThroughClient asks the client's Host for one URL via GET and returns the
+// body, rejecting non-2xx responses for single-argument fetch(url) callers.
 //
 // It carries the request id so the client can be told to drop the request when
 // Core stops waiting for it, which is what makes closing a screen stop the
 // service's traffic rather than leaving it to its own timeout.
 func fetchThroughClient(ctx context.Context, client Host, id, rawURL string) (string, error) {
-	bridge := hostBridge{h: client}
-	response, err := bridge.Do(ctx, &host.Request{
-		Method: "GET", URL: rawURL, Partition: "service:" + id,
+	resp, err := fetchRequestThroughClient(ctx, client, id, service.FetchRequest{
+		Method: http.MethodGet,
+		URL:    rawURL,
 	})
 	if err != nil {
 		return "", err
 	}
-	if response.Status < 200 || response.Status > 299 {
-		return "", fmt.Errorf("service: %s answered HTTP %d", rawURL, response.Status)
+	if resp.Status < 200 || resp.Status > 299 {
+		return "", fmt.Errorf("service: %s answered HTTP %d", rawURL, resp.Status)
 	}
-	return string(response.Body), nil
+	return resp.Body, nil
+}
+
+// fetchRequestThroughClient forwards method, headers and body through the
+// client's Host with Cookies disabled and partition "service:<id>", returning
+// status, ok, body and flattened headers without failing on non-2xx statuses.
+func fetchRequestThroughClient(ctx context.Context, client Host, id string, req service.FetchRequest) (*service.FetchResponse, error) {
+	if err := host.ValidateURL(req.URL); err != nil {
+		return nil, fmt.Errorf("service: %w", err)
+	}
+	method := strings.ToUpper(strings.TrimSpace(req.Method))
+	if method == "" {
+		method = http.MethodGet
+	}
+	switch method {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
+	default:
+		return nil, fmt.Errorf("service: unsupported fetch method %q", method)
+	}
+	var hdr http.Header
+	if len(req.Headers) > 0 {
+		hdr = make(http.Header, len(req.Headers))
+		for k, v := range req.Headers {
+			if strings.EqualFold(strings.TrimSpace(k), "cookie") {
+				return nil, fmt.Errorf("service: fetch init.headers may not set Cookie")
+			}
+			if err := host.ValidHeader(k, v); err != nil {
+				return nil, fmt.Errorf("service: %w", err)
+			}
+			hdr.Set(k, v)
+		}
+	}
+	var body []byte
+	if req.Body != "" {
+		body = []byte(req.Body)
+	}
+	bridge := hostBridge{h: client}
+	response, err := bridge.Do(ctx, &host.Request{
+		Method:    method,
+		URL:       req.URL,
+		Header:    hdr,
+		Body:      body,
+		Cookies:   false,
+		Partition: "service:" + id,
+	})
+	if err != nil {
+		return nil, err
+	}
+	flatHeaders := make(map[string]string, len(response.Header))
+	for k, vals := range response.Header {
+		if len(vals) > 0 {
+			flatHeaders[strings.ToLower(k)] = strings.Join(vals, ", ")
+		}
+	}
+	return &service.FetchResponse{
+		Status:  response.Status,
+		OK:      response.Status >= 200 && response.Status <= 299,
+		Body:    string(response.Body),
+		Headers: flatHeaders,
+	}, nil
 }

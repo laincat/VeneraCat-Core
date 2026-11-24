@@ -72,7 +72,8 @@ export function describe() {
 
 | 全局 | 需要的权限 | 行为 |
 | --- | --- | --- |
-| `fetch(url)` | `network` | 同步取回响应正文 |
+| `fetch(url)` | `network` | 同步发 `GET` 并取回响应正文字符串（非 2xx 抛错） |
+| `fetch(url, init)` | `network` | 支持 `method`（`GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`HEAD`）、字符串键值 `headers`（禁止设 `Cookie`）与字符串 `body`；同步返回 `{ status, ok, body, headers }`，非 2xx 透传状态码，网络/超时/取消抛错 |
 | `storageGet(key)` | `storage` | 读一个键；没有则 `null` |
 | `storageSet(key, value)` | `storage` | 写一个键 |
 | `secret(key)` | `secrets` | 读一个账号值 |
@@ -97,7 +98,7 @@ export function describe() {
 
 ## 传输桥
 
-移动端服务使用共享宿主桥发送 GET，明确禁用 Cookie，分区为 `service:<id>`。桌面宿主可使用 `service.Bridge`：
+移动端服务使用共享宿主桥转发 `fetch(url)` 与 `fetch(url, init)`（透传 method/headers/body 与状态码），明确禁用 Cookie，分区为 `service:<id>`。桌面宿主可使用 `service.Bridge`（可通过 `BridgePolicy.Transport` 注入 `host.Transport`）：
 
 | 规则 | 行为 |
 | --- | --- |
@@ -105,9 +106,9 @@ export function describe() {
 | 主机 | 策略可限定主机及其子域；空表示不限（仅适合用户亲手装的服务） |
 | 重定向 | 每一跳都按同样的规则重新检查，最多 5 跳 |
 | 体积 | 单次响应上限默认 4 MiB |
-| Cookie | 默认不带 Cookie，服务不是浏览器页面 |
+| Cookie | 默认不带 Cookie，禁止通过 `init.headers` 注入 `Cookie` 头，服务不是浏览器页面 |
 
-`Bridge.Host(Host{})` 将桌面传输接进运行时。运行时通过注入的 `Host.Fetch` 访问网络。
+`Bridge.Host(Host{})` 将桌面传输的 `Fetch` 与 `FetchRequest` 回调一并接进运行时。若宿主仅提供旧版 `Host.Fetch` 而未实现 `Host.FetchRequest`，带非 GET 方法、自定义头或请求体的 `fetch(url, init)` 会明确报错，绝不静默降级为 GET。
 
 ## 尚未实现
 

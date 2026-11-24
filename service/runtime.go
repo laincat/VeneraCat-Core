@@ -5,11 +5,32 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync/atomic"
 
 	"github.com/MoeForge/moejs"
+	"github.com/laincat/veneracat-core/host"
 )
+
+// FetchRequest describes an HTTP request issued by a service plugin via
+// fetch(url, init).
+type FetchRequest struct {
+	Method  string
+	URL     string
+	Headers map[string]string
+	Body    string
+}
+
+// FetchResponse is the HTTP response returned to a service plugin calling
+// fetch(url, init). Non-2xx status codes are returned in Status/OK rather than
+// as Go errors so plugins can inspect 401/403/404 responses cleanly.
+type FetchResponse struct {
+	Status  int
+	OK      bool
+	Body    string
+	Headers map[string]string
+}
 
 // Host is what a service plugin may reach. Every callback is optional: a
 // service that asks for a capability the host does not implement gets an
@@ -18,9 +39,14 @@ import (
 // The host decides what a service may do; Grants decides what it may ask for.
 // A service that calls something it did not declare gets a clear refusal.
 type Host struct {
-	// Fetch performs one HTTP request and returns the response body. It is
+	// Fetch performs one GET HTTP request and returns the response body. It is
 	// only reachable when the network permission is granted.
 	Fetch func(ctx context.Context, url string) (string, error)
+	// FetchRequest performs one HTTP request carrying method, headers and body,
+	// returning status, body and response headers without treating non-2xx
+	// status codes as errors. It backs fetch(url, init) and may also satisfy
+	// single-argument fetch(url) when Fetch is nil.
+	FetchRequest func(ctx context.Context, req FetchRequest) (*FetchResponse, error)
 	// StorageGet reads one stored value. It reports false when the key is
 	// unknown.
 	StorageGet func(ctx context.Context, key string) (string, bool, error)
@@ -169,18 +195,66 @@ func (r *Runtime) Interrupt(reason any) {
 // service rather than a decision by the host.
 func (r *Runtime) installGlobals(rt *moejs.Runtime, m *Manifest, grants Grants) error {
 	fetch := moejs.NativeFunc(func(realm *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {
-		url := argString(realm, args, 0)
+		rawURL := argString(realm, args, 0)
 		if !grants.Allows(PermissionNetwork) {
 			return moejs.Undefined(), refusal(m, PermissionNetwork, "use the network")
 		}
-		if r.host.Fetch == nil {
+		hasInit := len(args) >= 2 && !args[1].IsUndefined() && !args[1].IsNull()
+		if !hasInit {
+			if r.host.Fetch != nil {
+				body, err := r.host.Fetch(r.active, rawURL)
+				if err != nil {
+					return moejs.Undefined(), err
+				}
+				return moejs.String(body), nil
+			}
+			if r.host.FetchRequest != nil {
+				resp, err := r.host.FetchRequest(r.active, FetchRequest{Method: http.MethodGet, URL: rawURL})
+				if err != nil {
+					return moejs.Undefined(), err
+				}
+				if resp == nil {
+					return moejs.Undefined(), errors.New("service: host returned nil fetch response")
+				}
+				if resp.Status < 200 || resp.Status > 299 {
+					return moejs.Undefined(), fmt.Errorf("service: %s returned HTTP %d", rawURL, resp.Status)
+				}
+				return moejs.String(resp.Body), nil
+			}
 			return moejs.Undefined(), fmt.Errorf("service: this host has no network access")
 		}
-		body, err := r.host.Fetch(r.active, url)
+
+		req, err := parseFetchInit(realm, args[1])
 		if err != nil {
 			return moejs.Undefined(), err
 		}
-		return moejs.String(body), nil
+		req.URL = rawURL
+		if r.host.FetchRequest == nil {
+			if r.host.Fetch == nil {
+				return moejs.Undefined(), fmt.Errorf("service: this host has no network access")
+			}
+			if req.Method != http.MethodGet || len(req.Headers) > 0 || req.Body != "" {
+				return moejs.Undefined(), errors.New("service: this host does not support custom fetch method, headers or body")
+			}
+			body, err := r.host.Fetch(r.active, rawURL)
+			if err != nil {
+				return moejs.Undefined(), err
+			}
+			return buildFetchResponseValue(realm, &FetchResponse{
+				Status:  http.StatusOK,
+				OK:      true,
+				Body:    body,
+				Headers: map[string]string{},
+			})
+		}
+		resp, err := r.host.FetchRequest(r.active, req)
+		if err != nil {
+			return moejs.Undefined(), err
+		}
+		if resp == nil {
+			return moejs.Undefined(), errors.New("service: host returned nil fetch response")
+		}
+		return buildFetchResponseValue(realm, resp)
 	})
 	get := moejs.NativeFunc(func(realm *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {
 		key := argString(realm, args, 0)
@@ -341,6 +415,85 @@ func argString(realm *moejs.Realm, args []moejs.Value, index int) string {
 		return ""
 	}
 	return strings.TrimSpace(text)
+}
+
+func normalizeFetchMethod(raw string) (string, error) {
+	method := strings.ToUpper(strings.TrimSpace(raw))
+	if method == "" {
+		return http.MethodGet, nil
+	}
+	switch method {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
+		return method, nil
+	default:
+		return "", fmt.Errorf("service: unsupported fetch method %q", method)
+	}
+}
+
+func parseFetchInit(realm *moejs.Realm, v moejs.Value) (FetchRequest, error) {
+	raw, err := realm.ToGoStrict(v)
+	if err != nil {
+		return FetchRequest{}, fmt.Errorf("service: invalid fetch init: %w", err)
+	}
+	fields, ok := raw.(map[string]any)
+	if !ok {
+		return FetchRequest{}, errors.New("service: fetch init must be an object")
+	}
+	req := FetchRequest{Method: http.MethodGet}
+	if rawMethod, exists := fields["method"]; exists && rawMethod != nil {
+		methodText, ok := rawMethod.(string)
+		if !ok {
+			return FetchRequest{}, errors.New("service: fetch init.method must be a string")
+		}
+		method, err := normalizeFetchMethod(methodText)
+		if err != nil {
+			return FetchRequest{}, err
+		}
+		req.Method = method
+	}
+	if rawHeaders, exists := fields["headers"]; exists && rawHeaders != nil {
+		headerMap, ok := rawHeaders.(map[string]any)
+		if !ok {
+			return FetchRequest{}, errors.New("service: fetch init.headers must be an object")
+		}
+		if len(headerMap) > 0 {
+			req.Headers = make(map[string]string, len(headerMap))
+			for k, rawVal := range headerMap {
+				val, ok := rawVal.(string)
+				if !ok {
+					return FetchRequest{}, fmt.Errorf("service: fetch header %q value must be a string", k)
+				}
+				if strings.EqualFold(strings.TrimSpace(k), "cookie") {
+					return FetchRequest{}, errors.New("service: fetch init.headers may not set Cookie")
+				}
+				if err := host.ValidHeader(k, val); err != nil {
+					return FetchRequest{}, fmt.Errorf("service: %w", err)
+				}
+				req.Headers[k] = val
+			}
+		}
+	}
+	if rawBody, exists := fields["body"]; exists && rawBody != nil {
+		bodyText, ok := rawBody.(string)
+		if !ok {
+			return FetchRequest{}, errors.New("service: fetch init.body must be a string")
+		}
+		req.Body = bodyText
+	}
+	return req, nil
+}
+
+func buildFetchResponseValue(realm *moejs.Realm, resp *FetchResponse) (moejs.Value, error) {
+	headers := make(map[string]any, len(resp.Headers))
+	for k, v := range resp.Headers {
+		headers[strings.ToLower(k)] = v
+	}
+	return realm.FromGo(map[string]any{
+		"status":  resp.Status,
+		"ok":      resp.Status >= 200 && resp.Status <= 299,
+		"body":    resp.Body,
+		"headers": headers,
+	})
 }
 
 // rejectionText renders why a promise was rejected: the message of an Error,

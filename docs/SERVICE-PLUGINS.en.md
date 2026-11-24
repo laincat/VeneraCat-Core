@@ -72,7 +72,8 @@ The module reaches the host through global functions, each gated by a permission
 
 | Global | Permission | Behaviour |
 | --- | --- | --- |
-| `fetch(url)` | `network` | fetch a response body, synchronously |
+| `fetch(url)` | `network` | send a synchronous `GET` and return the response body string (throws on non-2xx) |
+| `fetch(url, init)` | `network` | send `method` (`GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`HEAD`), string `headers` (`Cookie` forbidden) and string `body`; synchronously returns `{ status, ok, body, headers }` with non-2xx preserved, while network/timeout/cancel errors throw |
 | `storageGet(key)` | `storage` | read one key; `null` when unknown |
 | `storageSet(key, value)` | `storage` | write one key |
 | `secret(key)` | `secrets` | read one account value |
@@ -97,7 +98,7 @@ On mobile, create a session with `NewServiceRunner(host, dataDir)` and call `Clo
 
 ## Transport bridge
 
-Mobile services use the shared host bridge for GET requests with cookies disabled and partition `service:<id>`. Desktop hosts can use `service.Bridge`:
+Mobile services use the shared host bridge for both `fetch(url)` and `fetch(url, init)` (forwarding method, headers, body and status) with cookies disabled and partition `service:<id>`. Desktop hosts can use `service.Bridge` (optionally backed by `host.Transport` via `BridgePolicy.Transport`):
 
 | Rule | Behaviour |
 | --- | --- |
@@ -105,9 +106,9 @@ Mobile services use the shared host bridge for GET requests with cookies disable
 | Host | a policy may limit requests to a host and its subdomains; empty means any, which only suits a service the user installed by hand |
 | Redirects | every hop is checked again by the same rules, at most 5 hops |
 | Size | one response is bounded at 4 MiB by default |
-| Cookies | none by default; a service is not a browser page |
+| Cookies | none by default; setting `Cookie` in `init.headers` is refused; a service is not a browser page |
 
-`Bridge.Host(Host{})` connects the desktop transport to the runtime. The runtime accesses the network through its injected `Host.Fetch` callback.
+`Bridge.Host(Host{})` binds both `Host.Fetch` and `Host.FetchRequest` into the runtime. When a host only provides legacy `Host.Fetch` without `Host.FetchRequest`, any `fetch(url, init)` with a non-GET method, custom headers or body fails explicitly rather than silently downgrading to GET.
 
 ## Not implemented yet
 
