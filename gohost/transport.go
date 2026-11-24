@@ -60,7 +60,7 @@ func NewTransport(jar *cookies.Jar, userAgent string, timeout time.Duration) *Tr
 			if len(via) > 0 {
 				previous := via[0].URL
 				if !strings.EqualFold(previous.Scheme, req.URL.Scheme) || !strings.EqualFold(previous.Host, req.URL.Host) {
-					for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie"} {
+					for _, name := range []string{"Authorization", "X-Api-Key", "X-Goog-Api-Key", "Proxy-Authorization", "Cookie"} {
 						req.Header.Del(name)
 					}
 				}

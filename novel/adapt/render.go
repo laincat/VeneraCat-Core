@@ -66,34 +66,34 @@ func (f ImageSinkFunc) SaveImage(ctx context.Context, meta PanelImageMeta, mimeT
 type RenderOptions struct {
 	// AspectRatio requests a panel aspect ratio when supported by the backend
 	// (for example "3:4", "4:3", "16:9", "1:1").
-	AspectRatio string
+	AspectRatio string `json:"aspectRatio,omitempty"`
 	// Size requests pixel dimensions when supported by the backend (for example
 	// "1024x1024", "1024x1536").
-	Size string
+	Size string `json:"size,omitempty"`
 	// MaxRetries is the number of retry attempts after an initial transient
 	// failure for a single panel. ErrContentBlocked, ErrBudgetExceeded, and
 	// context cancellation are never retried.
-	MaxRetries int
+	MaxRetries int `json:"maxRetries,omitempty"`
 	// ForceRerender renders panels even if their ImageStatus is already done.
 	// When false, already-done panels are skipped for resumable execution.
-	ForceRerender bool
+	ForceRerender bool `json:"forceRerender,omitempty"`
 	// ContinueOnError keeps rendering subsequent panels in RenderStoryboard
 	// after a non-budget panel failure (such as ErrContentBlocked or exhausted
 	// transient retries). ErrBudgetExceeded and context cancellation always
 	// stop immediately.
-	ContinueOnError bool
+	ContinueOnError bool `json:"continueOnError,omitempty"`
 	// StyleReferences supplies optional local personal style reference images
 	// attached to panel requests.
-	StyleReferences []ImageRef
+	StyleReferences []ImageRef `json:"styleReferences,omitempty"`
 	// CharacterReferences supplies optional character turnaround / portrait
 	// reference images keyed by character ID, name, or alias (case-insensitive).
-	CharacterReferences map[string][]ImageRef
+	CharacterReferences map[string][]ImageRef `json:"characterReferences,omitempty"`
 	// FeedbackCharacterRefs, when true, captures the first rendered image for a
 	// character lacking a reference during RenderStoryboard and attaches it to
 	// subsequent panels featuring that character.
-	FeedbackCharacterRefs bool
+	FeedbackCharacterRefs bool `json:"feedbackCharacterRefs,omitempty"`
 	// OnStatusChange is optionally called on every ImageStatus transition.
-	OnStatusChange func(sceneID, panelID string, status ImageStatus, err error)
+	OnStatusChange func(sceneID, panelID string, status ImageStatus, err error) `json:"-"`
 }
 
 // PanelFailure records one panel that failed during RenderStoryboard.
@@ -274,6 +274,9 @@ func RenderPanel(ctx context.Context, proj *Project, chapterID, sceneID, panelID
 	if gen == nil {
 		return nil, errors.New("adapt: nil image generator")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	sb := proj.Storyboards[chapterID]
 	if sb == nil {
 		return nil, fmt.Errorf("adapt: storyboard not found for chapter %q", chapterID)
@@ -295,6 +298,9 @@ func RenderStoryboard(ctx context.Context, proj *Project, chapterID string, gen 
 	}
 	if gen == nil {
 		return nil, errors.New("adapt: nil image generator")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	sb := proj.Storyboards[chapterID]
 	if sb == nil {

@@ -35,7 +35,7 @@ func TestAuditRedirectWithCookiesDisabledDoesNotTouchJar(t *testing.T) {
 func TestAuditRedirectDoesNotForwardProviderCredentials(t *testing.T) {
 	tr, _ := newTestTransport(t)
 	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization"} {
+		for _, name := range []string{"Authorization", "X-Api-Key", "X-Goog-Api-Key", "Proxy-Authorization"} {
 			if r.Header.Get(name) != "" {
 				t.Errorf("redirect forwarded %s at %s", name, r.URL.Path)
 			}
@@ -47,7 +47,7 @@ func TestAuditRedirectDoesNotForwardProviderCredentials(t *testing.T) {
 	defer final.Close()
 	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, final.URL, http.StatusFound) }))
 	defer first.Close()
-	_, err := tr.Do(context.Background(), &host.Request{URL: first.URL, Header: http.Header{"Authorization": {"Bearer private"}, "X-Api-Key": {"private"}, "Proxy-Authorization": {"Basic private"}}})
+	_, err := tr.Do(context.Background(), &host.Request{URL: first.URL, Header: http.Header{"Authorization": {"Bearer private"}, "X-Api-Key": {"private"}, "X-Goog-Api-Key": {"private"}, "Proxy-Authorization": {"Basic private"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

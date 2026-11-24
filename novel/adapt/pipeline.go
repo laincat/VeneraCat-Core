@@ -506,18 +506,40 @@ func dedupeStrings(in []string) []string {
 	return out
 }
 
-// AdaptOptions tunes chapter chunking.
+// AdaptOptions tunes chapter chunking and resumable execution.
 type AdaptOptions struct {
-	MaxChunkRunes int
+	MaxChunkRunes int              `json:"maxChunkRunes,omitempty"`
+	Checkpoint    *AdaptCheckpoint `json:"checkpoint,omitempty"`
 }
 
-// AdaptResult reports the generated storyboard, newly added characters, and
-// usage spent on this chapter.
+// AdaptCheckpoint is the serialisable resume state for a multi-chunk chapter
+// adaptation. Passing it back via AdaptOptions.Checkpoint skips already
+// completed chunks and continues from CompletedChunks without re-billing
+// earlier calls.
+type AdaptCheckpoint struct {
+	ChapterID       string         `json:"chapterId"`
+	ChapterTitle    string         `json:"chapterTitle,omitempty"`
+	TotalChunks     int            `json:"totalChunks"`
+	CompletedChunks int            `json:"completedChunks"`
+	MaxChunkRunes   int            `json:"maxChunkRunes,omitempty"`
+	Storyboard      *Storyboard    `json:"storyboard,omitempty"`
+	Characters      CharacterSheet `json:"characters"`
+	AddedCharacters []Character    `json:"addedCharacters,omitempty"`
+	Usage           Usage          `json:"usage"`
+	SceneSeq        int            `json:"sceneSeq,omitempty"`
+	PanelSeq        int            `json:"panelSeq,omitempty"`
+}
+
+// AdaptResult reports the generated storyboard, newly added characters,
+// usage spent on this chapter, and any resume checkpoint when adaptation
+// stopped before completing all chunks.
 type AdaptResult struct {
-	Storyboard      *Storyboard
-	AddedCharacters []Character
-	Chunks          int
-	Usage           Usage
+	Storyboard      *Storyboard      `json:"storyboard,omitempty"`
+	AddedCharacters []Character      `json:"addedCharacters,omitempty"`
+	Chunks          int              `json:"chunks"`
+	CompletedChunks int              `json:"completedChunks"`
+	Usage           Usage            `json:"usage"`
+	Checkpoint      *AdaptCheckpoint `json:"checkpoint,omitempty"`
 }
 
 const systemPrompt = `You are a comic storyboard adapter. Convert the provided novel excerpt into strict JSON matching {"scenes":[{"id":"s1","setting":"...","mood":"...","panels":[{"id":"p1","shot":"medium shot","action":"...","characters":["..."],"dialogues":[{"speaker":"...","text":"...","kind":"speech"}],"prompt":"visual prompt","imageStatus":"pending"}]}],"newCharacters":[{"id":"c1","name":"...","appearance":"...","outfit":"...","traits":["..."]}]}. Output JSON only, with no prose outside the JSON object.`
@@ -554,6 +576,13 @@ func BuildChapterPrompt(proj *Project, chapter novel.Chapter, chunk string, chun
 // AdaptChapter adapts a single chapter into a Storyboard, merging newly
 // discovered characters into proj.Characters and enforcing proj.Budget before
 // every generator call.
+//
+// When a multi-chunk chapter stops early due to ErrBudgetExceeded, context
+// cancellation, a transient generator error, or invalid chunk JSON,
+// AdaptChapter returns a non-nil AdaptResult carrying a serialisable
+// Checkpoint alongside the error. Passing that Checkpoint back via
+// AdaptOptions.Checkpoint skips completed chunks and resumes without
+// re-billing earlier calls.
 func AdaptChapter(ctx context.Context, proj *Project, chapter novel.Chapter, content novel.ChapterContent, gen TextGenerator, opts AdaptOptions) (*AdaptResult, error) {
 	if proj == nil {
 		return nil, errors.New("adapt: nil project")
@@ -561,8 +590,24 @@ func AdaptChapter(ctx context.Context, proj *Project, chapter novel.Chapter, con
 	if gen == nil {
 		return nil, errors.New("adapt: nil text generator")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cp := opts.Checkpoint
+	maxChunkRunes := opts.MaxChunkRunes
+	if maxChunkRunes <= 0 && cp != nil && cp.MaxChunkRunes > 0 {
+		maxChunkRunes = cp.MaxChunkRunes
+	}
+	if maxChunkRunes <= 0 {
+		maxChunkRunes = DefaultMaxChunkRunes
+	}
+	if opts.MaxChunkRunes > 0 && cp != nil && cp.MaxChunkRunes > 0 && opts.MaxChunkRunes != cp.MaxChunkRunes {
+		return nil, fmt.Errorf("adapt: checkpoint maxChunkRunes %d does not match requested %d", cp.MaxChunkRunes, opts.MaxChunkRunes)
+	}
+
 	plain := ExtractText(content.HTML)
-	chunks := ChunkText(plain, opts.MaxChunkRunes)
+	chunks := ChunkText(plain, maxChunkRunes)
 	if len(chunks) == 0 {
 		return nil, ErrEmptyChapter
 	}
@@ -577,16 +622,83 @@ func AdaptChapter(ctx context.Context, proj *Project, chapter novel.Chapter, con
 		Chunks:     len(chunks),
 	}
 
+	startChunk := 0
 	sceneSeq := 0
 	panelSeq := 0
-	for i, chunk := range chunks {
-		if err := proj.Usage.CheckNextCall(proj.Budget); err != nil {
-			return nil, err
+	if cp != nil {
+		if cp.ChapterID != "" && cp.ChapterID != chapter.ID {
+			return nil, fmt.Errorf("adapt: checkpoint chapter %q does not match chapter %q", cp.ChapterID, chapter.ID)
 		}
-		req := BuildChapterPrompt(proj, chapter, chunk, i, len(chunks))
+		if cp.TotalChunks > 0 && cp.TotalChunks != len(chunks) {
+			return nil, fmt.Errorf("adapt: checkpoint total chunks %d does not match chapter chunks %d", cp.TotalChunks, len(chunks))
+		}
+		if cp.CompletedChunks < 0 || cp.CompletedChunks > len(chunks) {
+			return nil, fmt.Errorf("adapt: checkpoint completed chunks %d out of range [0,%d]", cp.CompletedChunks, len(chunks))
+		}
+		startChunk = cp.CompletedChunks
+		res.CompletedChunks = cp.CompletedChunks
+		if cp.Storyboard != nil {
+			sb = cloneStoryboard(cp.Storyboard)
+			sb.ChapterID = chapter.ID
+			if sb.ChapterTitle == "" {
+				sb.ChapterTitle = chapter.Title
+			}
+			if sb.Scenes == nil {
+				sb.Scenes = []Scene{}
+			}
+			res.Storyboard = sb
+		}
+		if len(cp.Characters.Characters) > 0 {
+			MergeCharacters(&proj.Characters, cloneCharacters(cp.Characters.Characters), chapter.ID)
+		}
+		res.AddedCharacters = cloneCharacters(cp.AddedCharacters)
+		res.Usage = cp.Usage
+		if proj.Usage == (Usage{}) && cp.Usage != (Usage{}) {
+			proj.Usage = cp.Usage
+		}
+		sceneSeq = cp.SceneSeq
+		if sceneSeq < len(sb.Scenes) {
+			sceneSeq = len(sb.Scenes)
+		}
+		panelSeq = cp.PanelSeq
+		existingPanels := countStoryboardPanels(sb)
+		if panelSeq < existingPanels {
+			panelSeq = existingPanels
+		}
+	}
+
+	partialResult := func(completed int) *AdaptResult {
+		res.CompletedChunks = completed
+		res.Checkpoint = &AdaptCheckpoint{
+			ChapterID:       chapter.ID,
+			ChapterTitle:    chapter.Title,
+			TotalChunks:     len(chunks),
+			CompletedChunks: completed,
+			MaxChunkRunes:   maxChunkRunes,
+			Storyboard:      cloneStoryboard(sb),
+			Characters:      cloneCharacterSheet(proj.Characters),
+			AddedCharacters: cloneCharacters(res.AddedCharacters),
+			Usage:           res.Usage,
+			SceneSeq:        sceneSeq,
+			PanelSeq:        panelSeq,
+		}
+		return res
+	}
+
+	for i := startChunk; i < len(chunks); i++ {
+		if err := ctx.Err(); err != nil {
+			return partialResult(i), err
+		}
+		if err := proj.Usage.CheckNextCall(proj.Budget); err != nil {
+			return partialResult(i), err
+		}
+		req := BuildChapterPrompt(proj, chapter, chunks[i], i, len(chunks))
 		genResp, err := gen.Generate(ctx, req)
 		if err != nil {
-			return nil, fmt.Errorf("adapt: chunk %d/%d generate: %w", i+1, len(chunks), err)
+			return partialResult(i), fmt.Errorf("adapt: chunk %d/%d generate: %w", i+1, len(chunks), err)
+		}
+		if genResp == nil {
+			return partialResult(i), fmt.Errorf("adapt: chunk %d/%d generate: empty generator response", i+1, len(chunks))
 		}
 		delta := genResp.Usage
 		if delta.Calls == 0 {
@@ -597,7 +709,7 @@ func AdaptChapter(ctx context.Context, proj *Project, chapter novel.Chapter, con
 
 		parsed, err := ParseAdaptationJSON(genResp.Text)
 		if err != nil {
-			return nil, fmt.Errorf("adapt: chunk %d/%d: %w", i+1, len(chunks), err)
+			return partialResult(i), fmt.Errorf("adapt: chunk %d/%d: %w", i+1, len(chunks), err)
 		}
 
 		added := MergeCharacters(&proj.Characters, parsed.NewCharacters, chapter.ID)
@@ -616,11 +728,84 @@ func AdaptChapter(ctx context.Context, proj *Project, chapter novel.Chapter, con
 			}
 			sb.Scenes = append(sb.Scenes, sc)
 		}
+		res.CompletedChunks = i + 1
 	}
 
+	res.CompletedChunks = len(chunks)
+	res.Checkpoint = nil
 	if proj.Storyboards == nil {
 		proj.Storyboards = map[string]*Storyboard{}
 	}
 	proj.Storyboards[chapter.ID] = sb
 	return res, nil
+}
+
+func cloneStoryboard(sb *Storyboard) *Storyboard {
+	if sb == nil {
+		return nil
+	}
+	out := &Storyboard{
+		ChapterID:    sb.ChapterID,
+		ChapterTitle: sb.ChapterTitle,
+		Scenes:       make([]Scene, len(sb.Scenes)),
+	}
+	for si, sc := range sb.Scenes {
+		clonedScene := Scene{
+			ID:      sc.ID,
+			Setting: sc.Setting,
+			Mood:    sc.Mood,
+			Panels:  make([]Panel, len(sc.Panels)),
+		}
+		for pi, p := range sc.Panels {
+			clonedPanel := p
+			if len(p.Characters) > 0 {
+				clonedPanel.Characters = append([]string(nil), p.Characters...)
+			}
+			if len(p.Dialogues) > 0 {
+				clonedPanel.Dialogues = append([]Dialogue(nil), p.Dialogues...)
+			}
+			clonedScene.Panels[pi] = clonedPanel
+		}
+		out.Scenes[si] = clonedScene
+	}
+	return out
+}
+
+func cloneCharacter(c Character) Character {
+	out := c
+	if len(c.Aliases) > 0 {
+		out.Aliases = append([]string(nil), c.Aliases...)
+	}
+	if len(c.Traits) > 0 {
+		out.Traits = append([]string(nil), c.Traits...)
+	}
+	return out
+}
+
+func cloneCharacters(in []Character) []Character {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Character, len(in))
+	for i, c := range in {
+		out[i] = cloneCharacter(c)
+	}
+	return out
+}
+
+func cloneCharacterSheet(sheet CharacterSheet) CharacterSheet {
+	return CharacterSheet{
+		Characters: cloneCharacters(sheet.Characters),
+	}
+}
+
+func countStoryboardPanels(sb *Storyboard) int {
+	if sb == nil {
+		return 0
+	}
+	n := 0
+	for _, sc := range sb.Scenes {
+		n += len(sc.Panels)
+	}
+	return n
 }
