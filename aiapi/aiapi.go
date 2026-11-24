@@ -1,10 +1,8 @@
 // Package aiapi builds the requests for the standard AI protocols that VeneraCat
 // Core supports out of the box.
 //
-// The package only constructs requests. It opens no connection, stores no
-// credential and makes no routing decision: the client performs the request
-// through its Host, and any policy — which account to use, how to classify a
-// request, what to mask — belongs to an extension plugin.
+// It builds native requests, decodes replies and runs optional extensions.
+// The client owns network connections and credential storage.
 //
 // Three protocols are covered:
 //
@@ -81,6 +79,16 @@ type Config struct {
 // protocol's own JSON object and is kept as written, so key order, exact
 // numbers and unknown fields survive.
 func BuildRequest(cfg Config, body json.RawMessage) (*host.Request, error) {
+	if _, err := pathFor(cfg.Protocol); err != nil {
+		return nil, err
+	}
+	if err := validateBody(cfg.Protocol, body); err != nil {
+		return nil, err
+	}
+	return buildRequest(cfg, body)
+}
+
+func buildRequest(cfg Config, body json.RawMessage) (*host.Request, error) {
 	path, err := pathFor(cfg.Protocol)
 	if err != nil {
 		return nil, err
@@ -91,9 +99,6 @@ func BuildRequest(cfg Config, body json.RawMessage) (*host.Request, error) {
 	}
 	header, err := headers(cfg, true)
 	if err != nil {
-		return nil, err
-	}
-	if err := validateBody(cfg.Protocol, body); err != nil {
 		return nil, err
 	}
 	return &host.Request{
@@ -312,13 +317,18 @@ func scanJSON(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	if err := scanValue(decoder); err != nil {
-		return err
+		if errors.Is(err, errDuplicateKey) {
+			return errDuplicateKey
+		}
+		return errors.New("aiapi: the request body is not valid JSON")
 	}
 	if _, err := decoder.Token(); err != io.EOF {
 		return errors.New("aiapi: the request body holds more than one JSON value")
 	}
 	return nil
 }
+
+var errDuplicateKey = errors.New("aiapi: the request body repeats an object key")
 
 func scanValue(decoder *json.Decoder) error {
 	token, err := decoder.Token()
@@ -342,7 +352,7 @@ func scanValue(decoder *json.Decoder) error {
 				return errors.New("aiapi: the request body has a key that is not a string")
 			}
 			if _, duplicate := seen[key]; duplicate {
-				return errors.New("aiapi: the request body repeats an object key")
+				return errDuplicateKey
 			}
 			seen[key] = struct{}{}
 			if err := scanValue(decoder); err != nil {

@@ -287,6 +287,28 @@ final class CoreSmokeTests: XCTestCase {
         print("SMOKE shared source compatibility and artifact verification")
     }
 
+    func testStandardAIEventsReachSwift() throws {
+        let handle = try call { MobileAIStreamOpen("messages", $0) }
+        defer { MobileAIStreamClose(handle) }
+        let feed = """
+        data: {"type":"message_start","message":{"usage":{"input_tokens":12}}}
+
+        data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"plan"}}
+
+        data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}
+
+        data: {"type":"message_stop"}
+        """ + "\n\n"
+        let result = try call { MobileAIStreamPushEvents(handle, Data(feed.utf8).base64EncodedString(), $0) }
+        let events = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(result.utf8)) as? [[String: Any]])
+        XCTAssertEqual(events.compactMap { $0["kind"] as? String }, ["usage", "reasoning", "done"])
+        XCTAssertEqual(events[1]["text"] as? String, "plan")
+        XCTAssertEqual(events.last?["finishReason"] as? String, "end_turn")
+        let usage = events.last?["usage"] as? [String: Any]
+        XCTAssertEqual(usage?["inputTokens"] as? Int, 12)
+        XCTAssertTrue(usage?["outputTokens"] is NSNull)
+    }
+
     func testEngineStartupCost() throws {
         let core = try makeCore(FakeHost())
         defer { try? core.close() }

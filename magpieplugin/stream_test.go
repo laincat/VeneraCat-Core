@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/laincat/veneracat-core/aiapi"
 )
 
 func drain(t *testing.T, wire string, dialect Dialect) []Event {
@@ -123,7 +125,7 @@ func TestResponsesDialect(t *testing.T) {
 
 func TestVendorErrorInsideASuccessfulStream(t *testing.T) {
 	wire := strings.Join([]string{
-		`data: {"error":{"message":"rate limited","type":"rate_limit"}}`,
+		`data: {"error":{"message":"rate limited: mock-cookie-value","type":"rate_limit"}}`,
 		"",
 		`data: [DONE]`,
 		"",
@@ -132,8 +134,8 @@ func TestVendorErrorInsideASuccessfulStream(t *testing.T) {
 	if len(events) != 1 || events[0].Kind != EventError {
 		t.Fatalf("events = %#v", events)
 	}
-	if events[0].Text != "rate limited" {
-		t.Fatalf("message = %q", events[0].Text)
+	if e := events[0]; e.Error == nil || e.Error.Code != aiapi.ErrCodeRateLimit || !e.Error.Retryable || strings.Contains(e.Text, "mock-cookie-value") {
+		t.Fatalf("event = %+v", e)
 	}
 }
 

@@ -4,7 +4,7 @@
 
 Core 自带三种标准协议的请求构造:OpenAI Chat Completions、OpenAI Responses、Anthropic Messages。它们不需要安装任何插件,也不经过 Magpie 的 JS 包。
 
-这一层只负责**构造请求**:不联网、不保存凭据、不做路由决策、不做内容脱敏。实际发请求的是客户端(iOS 的 URLSession,或桌面端),通过 Core 的 `host.Transport` 桥。
+`aiapi` 构造请求、解码响应并执行可选扩展。网络连接和凭据存储归客户端所有。整包调用走 `host.Transport`，流式调用走同一个宿主的分段传输接口。
 
 ## 协议与默认端点
 
@@ -44,7 +44,7 @@ Core 自带三种标准协议的请求构造:OpenAI Chat Completions、OpenAI Re
 | `responses` | `model`、`input` | `input` 可以是字符串或数组 |
 | `messages` | `model`、`messages`、`max_tokens` | `max_tokens` 必须是正整数,`1.5` 不接受 |
 
-`stream` 可以缺省,也可以是 `true` 或 `false`,原样透传。**本阶段只构造请求,不代表已实现流式执行。**
+`stream` 可以缺省，也可以是 `true` 或 `false`。流式执行要求正文明确指定 `"stream":true`。
 
 歧义输入一律拒绝:一个正文里两个 JSON 值、同一个对象里重复的键、正文不是对象、正文为空。
 
@@ -54,7 +54,11 @@ Core 自带三种标准协议的请求构造:OpenAI Chat Completions、OpenAI Re
 
 ## 与插件的关系
 
-路由策略(按难度、到期时间、额度挑账号)、配额查询、正文脱敏属于**插件**,不在这一层。Core 只提供标准协议的调用底座与扩展机制,见 [AI-CORE-BOUNDARY.md](AI-CORE-BOUNDARY.md)。
+`aiapi-ext/1` 由宿主注册或按请求提供。空扩展直接发送客户端选定的账号和原生请求，不启用策略或脱敏。
+
+- `RoutePolicy` 接收不含凭据的候选与状态快照。同一快照应产生相同排序，显式模型、账号和原生协议约束由 Core 校验。未知额度保留为 `null`。Go 请求通过 `RequestMeta.Route` 选择启用，客户端的 `ResolveConfig` 只解析最终选中账号的配置。
+- `UsageObserver` 在实际调用传输后收到一次终态 `UsageEvent`。用量来自供应商的实际计数，未知值为 `null`。事件包含请求元数据与结果，通过 Go 回调和移动端 `usageEvent` JSON 提供。
+- `ContentMasker` 在发请求前接收原生 JSON，并为本次请求返回还原会话。钩子报错、缺少会话、返回无效 JSON 或改动模型/流式标记时，Core 拒绝发请求。会话分别缓冲文本与推理的跨块占位符，并在协议结束时刷新。整包还原结果必须是 JSON 对象。识别、替换与还原算法由扩展实现。
 
 
 ## 客户端解码与验收
@@ -73,9 +77,13 @@ Core 自带三种标准协议的请求构造:OpenAI Chat Completions、OpenAI Re
 | `BuildAIRequest(configJSON, bodyJSON)` | 只构造请求,返回 `{method,url,headers,bodyBase64,cookies,partition}` |
 | `BuildAIModelsRequest(configJSON)` | 同上的模型列表请求,GET 无正文 |
 | `SendAIRequest(callID, configJSON, bodyJSON)` | 构造并通过客户端自己的 `Host.HTTP` 发出,返回 `{status,headers,bodyBase64,finalUrl,streamed}` |
-| `SendAIRequestStream(callID, configJSON, bodyJSON)` | 用 `NewWithStream` 的分段传输边收边解析,返回 `{status,headers,text,finalUrl,streamed:true}` |
+| `SendAIRequestStream(callID, configJSON, bodyJSON)` | 用 `NewWithStream` 的分段传输边收边解析，返回汇总文本、推理、结束原因与用量 |
+| `RunAIRequest(callID, configJSON, bodyJSON, streamed, masker)` | 使用可空的 `AIContentMasker` 执行请求，失败以 `error` 对象返回 |
+| `AIStreamPushEvents(handle, chunkBase64)`、`AIStreamState(handle)` | 使用已有解码句柄，获取事件数组或累计状态。原 `AIStreamPush` 继续返回文本数组 |
+| `ClassifyAIHTTPError(protocol, status, headersJSON, bodyBase64)` | 为使用自有宿主传输的客户端归类 HTTP 错误 |
+| `ResolveAIRoute(inputJSON)`、`ValidateAIRouteDecision(inputJSON, decisionJSON)` | 获取默认候选顺序或校验外部策略排序，客户端按选中 ID 取得配置 |
 
-config JSON 是 `{"protocol":"chat|responses|messages","baseUrl":"","apiKey":"...","anthropicVersion":"","partition":""}`。
+config JSON 是 `{"protocol":"chat|responses|messages","baseUrl":"","apiKey":"...","anthropicVersion":"","partition":""}`。可加 `"requireMasking":true`，此时必须在 `RunAIRequest` 提供脱敏回调。Go 调用使用 `RequestMeta.RequireMasking`。
 
 `SendAIRequest` 走 Core 的宿主桥,所以请求会带上 `id`,也能被 `CancelHTTP` 取消。
 
@@ -85,5 +93,7 @@ config JSON 是 `{"protocol":"chat|responses|messages","baseUrl":"","apiKey":"..
 
 取消覆盖等待 `StreamOpen` 与 `StreamNext` 的阶段。客户端的 `StreamClose` 必须能打断等待,并允许重复关闭;当 `StreamOpen` 尚未返回自己的流 ID 时,关闭使用请求 JSON 中已知的 `id`。
 
-解码只取文本增量:`chat` 读 `choices[0].delta.content`,`responses` 读 `output_text.delta` 事件,`messages` 读 `content_block_delta` 里的 `text_delta`;此接口只返回汇总文本,不返回工具调用、推理块、用量或原始事件;也不能向界面逐块推送。网络分块与事件边界不对齐,解码器按空行收尾事件、跨块缓冲;`[DONE]`、`response.completed`、`message_stop` 表示结束,供应商的错误事件当错误抛出而不是当作空回答。
+结构化事件的 `kind` 为 `text`、`reasoning`、`usage`、`done` 或 `error`。`finishReason` 保存供应商原值，`outcome` 是归一结果。计数使用 JSON 数字，缺失的计数为 `null`，Anthropic 可在多个事件分次报告用量。`response.incomplete` 也是终态，客户端应按 `outcome` 区分截断或内容拦截。
+
+`error` 对象含 `code`、英文 `message`、`retryable`，以及可选 `status`、`protocol`、`retryAfter`（秒）。错误码包括 `auth_failed`、`rate_limit`、`quota_exhausted`、`content_blocked`、`upstream_error`、`cancelled`、`invalid_request`、`invalid_format`、`masking_failed` 与 `unknown`。Core 使用固定诊断文本，HTTP 失败时原整包入口仍返回状态和结构化错误，`bodyBase64` 为空。
 

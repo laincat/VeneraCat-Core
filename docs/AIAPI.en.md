@@ -4,7 +4,7 @@ English | [简体中文](AIAPI.md)
 
 Core ships request construction for three standard protocols: OpenAI Chat Completions, OpenAI Responses and Anthropic Messages. None of them needs a plugin, and none of them goes through a Magpie JS package.
 
-This layer only **builds requests**. It opens no connection, stores no credential, makes no routing decision and masks no content. The client performs the request — URLSession on iOS, or the desktop client — through Core's `host.Transport` bridge.
+`aiapi` builds requests, decodes responses and executes optional extensions. Clients own connections and credential storage. Whole-response calls use `host.Transport`, and streamed calls use the host's chunked transport.
 
 ## Protocols and default endpoints
 
@@ -44,7 +44,7 @@ Fields checked per protocol:
 | `responses` | `model`, `input` | `input` may be a string or an array |
 | `messages` | `model`, `messages`, `max_tokens` | `max_tokens` must be a positive whole number; `1.5` is refused |
 
-`stream` may be absent, `true` or `false`, and is passed through as written. **This stage only builds requests; it does not implement streamed execution.**
+`stream` may be absent, `true` or `false`. Streamed execution requires an explicit `"stream":true` in the body.
 
 Ambiguous input is refused: two JSON values in one body, a repeated key in one object, a body that is not an object, an empty body.
 
@@ -54,7 +54,11 @@ Ambiguous input is refused: two JSON values in one body, a repeated key in one o
 
 ## Relation to plugins
 
-Routing policies — picking an account by difficulty, expiry or remaining quota — quota queries and content masking belong to **plugins**, not to this layer. Core provides the standard-protocol base and the extension mechanism; see [AI-CORE-BOUNDARY.en.md](AI-CORE-BOUNDARY.en.md).
+Hosts register or supply `aiapi-ext/1` extensions per request. An empty extension set sends the client's selected account and native request directly.
+
+- `RoutePolicy` receives a credential-free snapshot of candidates and state. Identical snapshots should yield identical order. Core checks explicit model, account and native protocol constraints. Unknown quota stays `null`. A Go caller opts in through `RequestMeta.Route`, and its `ResolveConfig` resolves the selected account alone.
+- `UsageObserver` receives one terminal `UsageEvent` per attempted transport call. Counts come from the provider and missing values stay `null`. Go exposes a callback and mobile exposes `usageEvent` JSON with request metadata and outcome.
+- `ContentMasker` receives native JSON before transport and returns a restoration session for the call. Core stops before sending if the hook fails, omits the session, returns invalid JSON or changes the model or stream flag. The session buffers split placeholders separately for text and reasoning and flushes at protocol completion. Whole-body restoration must produce a JSON object. Extensions implement detection, masking and restoration.
 
 
 ## Client decoding and verification
@@ -73,9 +77,13 @@ The `mobile` package exports the following methods, JSON in and out:
 | `BuildAIRequest(configJSON, bodyJSON)` | builds only, returns `{method,url,headers,bodyBase64,cookies,partition}` |
 | `BuildAIModelsRequest(configJSON)` | the model-list request for the same root, GET without a body |
 | `SendAIRequest(callID, configJSON, bodyJSON)` | builds and performs it through the client's own `Host.HTTP`, returns `{status,headers,bodyBase64,finalUrl,streamed}` |
-| `SendAIRequestStream(callID, configJSON, bodyJSON)` | reads the reply through `NewWithStream`'s chunked transport, returns `{status,headers,text,finalUrl,streamed:true}` |
+| `SendAIRequestStream(callID, configJSON, bodyJSON)` | reads chunks through `NewWithStream` and returns accumulated text, reasoning, finish reason and usage |
+| `RunAIRequest(callID, configJSON, bodyJSON, streamed, masker)` | executes with an optional `AIContentMasker` and returns failures in the `error` object |
+| `AIStreamPushEvents(handle, chunkBase64)`, `AIStreamState(handle)` | read an event array or current decoder state from the existing handle. `AIStreamPush` still returns an array of text deltas |
+| `ClassifyAIHTTPError(protocol, status, headersJSON, bodyBase64)` | classifies HTTP failures for clients using their own host transport |
+| `ResolveAIRoute(inputJSON)`, `ValidateAIRouteDecision(inputJSON, decisionJSON)` | returns the default candidate order or validates an external ranking. The client resolves the selected configuration |
 
-The config JSON is `{"protocol":"chat|responses|messages","baseUrl":"","apiKey":"...","anthropicVersion":"","partition":""}`.
+The config JSON is `{"protocol":"chat|responses|messages","baseUrl":"","apiKey":"...","anthropicVersion":"","partition":""}`. With `"requireMasking":true`, supply a masking callback to `RunAIRequest`. Go callers use `RequestMeta.RequireMasking`.
 
 `SendAIRequest` goes through Core's host bridge, so the request carries an `id` and `CancelHTTP` can stop it.
 
@@ -85,5 +93,7 @@ Success requires both HTTP 2xx and a protocol completion marker (`[DONE]`, `resp
 
 Cancellation covers waits in both `StreamOpen` and `StreamNext`. The client's `StreamClose` must interrupt those waits and tolerate repeated calls. While `StreamOpen` has not returned its stream ID, closing uses the known `id` in the request JSON.
 
-Only text deltas are extracted: `chat` reads `choices[0].delta.content`, `responses` reads `output_text.delta` events, and `messages` reads the `text_delta` inside `content_block_delta`. This API returns only accumulated text; it does not return tool calls, reasoning blocks, usage or raw events, and cannot push individual chunks to the UI. Network chunks do not line up with events, so the decoder closes an event on a blank line and buffers across chunks; `[DONE]`, `response.completed` and `message_stop` end the answer, and a provider error event is raised as an error rather than an empty reply.
+Structured events have `kind` values `text`, `reasoning`, `usage`, `done` or `error`. `finishReason` keeps the provider value and `outcome` gives the normalized finish. Counts are JSON numbers with `null` for missing values. Anthropic can report usage across multiple events. `response.incomplete` also ends a stream, with `outcome` distinguishing truncation from a content block.
+
+The `error` object has `code`, an English `message`, `retryable` and optional `status`, `protocol` and `retryAfter` in seconds. Codes include `auth_failed`, `rate_limit`, `quota_exhausted`, `content_blocked`, `upstream_error`, `cancelled`, `invalid_request`, `invalid_format`, `masking_failed` and `unknown`. Core uses fixed diagnostic text. On HTTP failure the legacy whole-response method returns the status and structured error with an empty `bodyBase64`.
 

@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/laincat/veneracat-core/aiapi"
 )
 
 // Model is one model a client may choose.
@@ -32,21 +34,37 @@ type Model struct {
 // Models asks the package's vendor what it serves.
 func (in *Instance) Models(ctx context.Context) ([]Model, error) {
 	// The package's loader prepares the request shape and the sign-in.
-	if _, err := in.hook("chatPrepare", "{}"); err != nil {
-		return nil, err
+	if err := ctx.Err(); err != nil {
+		return nil, aiapi.ClassifyError("", err)
+	}
+	stop := context.AfterFunc(ctx, in.cancel)
+	defer stop()
+	prepared, err := in.hook("chatPrepare", "{}")
+	if err != nil {
+		return nil, pluginCallError(ctx, "", err)
+	}
+	plan, ok := prepared.(map[string]any)
+	if !ok || plan["failure"] != nil {
+		return nil, invalidChatPlan(plan)
+	}
+	declared, _ := plan["dialect"].(string)
+	protocol := aiapi.Protocol(declared)
+	if _, err := aiapi.NewStreamDecoder(protocol); err != nil {
+		protocol = ""
 	}
 	answer, err := in.hook("modelsRun", "{}")
 	if err != nil {
-		return nil, err
+		return nil, pluginCallError(ctx, protocol, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, aiapi.ClassifyError(protocol, err)
 	}
 	result, ok := answer.(map[string]any)
 	if !ok {
 		return nil, errors.New("magpieplugin: the vendor answered no model list")
 	}
 	if okFlag, isBool := result["ok"].(bool); isBool && !okFlag {
-		status, _ := result["status"].(int64)
-		body, _ := result["body"].(string)
-		return nil, fmt.Errorf("magpieplugin: the vendor does not list models (HTTP %d): %s", status, body)
+		return nil, fmt.Errorf("magpieplugin: the vendor does not list models: %w", pluginHTTPError(protocol, result))
 	}
 	return parseModels(result["body"]), nil
 }

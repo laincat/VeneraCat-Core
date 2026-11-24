@@ -6,7 +6,7 @@ This compares the user's new design with the earlier Core routing prototype to s
 
 ## Current-state correction(2026-11-04)
 
-This document retains early design discussion; later not-yet-implemented phrases are historical,not current status. Standard aiapi/mobile bridges,three-protocol requests/streaming/errors/cancellation and the independent iOS entry exist with separately scoped evidence; the standard AI UI still presents whole responses. Generic extensions,strategy/middleware,complete Magpie support and the new optional service/image-enhancer host remain unfinished. See the[shared-source project](../../VeneraCat%20Sources/docs/ECOSYSTEM.en.md) for current reuse,exclusion and service-plugin plans. No engine replacement,Core pin change or whole Magpie internal Go application linkage to iOS occurred here.
+This document retains the early design discussion, including the implementation status at that time. Today `aiapi` and `magpieplugin` share structured SSE decoding and provider errors across all three protocols. The standard AI pipeline supports `aiapi-ext/1`. Go hosts can register policy, usage and masking hooks. The mobile bridge offers JSON route validation, structured events and a per-call masking callback. Client adoption and extension ABI compatibility with original Magpie packages still need verification. See the [standard AI contract](AIAPI.en.md) and [current status](STATUS.en.md).
 
 ## Recommendation
 

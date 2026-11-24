@@ -3,10 +3,13 @@ package mobile
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/laincat/veneracat-core/aiapi"
 )
 
 // aiStreamStub answers a standard AI request piece by piece. It shares the
@@ -23,6 +26,7 @@ type aiStreamStub struct {
 	partition string
 	lastBody  string
 	lastAuth  string
+	cookies   bool
 	failNext  bool
 }
 
@@ -35,6 +39,7 @@ func (h *aiStreamStub) StreamOpen(requestJSON string) (string, error) {
 	defer h.mu.Unlock()
 	h.opened++
 	h.partition = req.Partition
+	h.cookies = req.Cookies
 	h.lastAuth = req.Headers.Get("Authorization")
 	body, err := base64.StdEncoding.DecodeString(req.BodyBase64)
 	if err != nil {
@@ -72,7 +77,7 @@ func (h *aiStreamStub) StreamClose(int64) {
 	h.closed++
 }
 
-var errStreamBroken = &streamTestError{"client read failed"}
+var errStreamBroken = &streamTestError{"client read failed: mock-private-transport-detail"}
 
 type streamTestError struct{ message string }
 
@@ -125,8 +130,8 @@ func TestSendAIRequestStreamCollectsDeltas(t *testing.T) {
 	if stub.lastAuth != "Bearer sk-test" {
 		t.Fatalf("authorization = %q", stub.lastAuth)
 	}
-	if stub.partition != "" {
-		t.Fatalf("partition = %q; an AI request must not borrow a comic source's jar", stub.partition)
+	if stub.partition != "" || stub.cookies {
+		t.Fatalf("AI request borrowed a cookie jar: partition = %q, cookies = %v", stub.partition, stub.cookies)
 	}
 	if stub.closed != 1 {
 		t.Fatalf("stream closed %d times", stub.closed)
@@ -167,8 +172,9 @@ func TestSendAIRequestStreamSurfacesProviderError(t *testing.T) {
 	core := newAIStreamCore(t, stub)
 	defer core.Close()
 	_, err := core.SendAIRequestStream(core.NewCall(), aiStreamConfig, aiStreamBody)
-	if err == nil || !strings.Contains(err.Error(), "invalid api key") {
-		t.Fatalf("err = %v, want the provider's message", err)
+	var failure *aiapi.ProviderError
+	if !errors.As(err, &failure) || failure.Code != aiapi.ErrCodeAuth {
+		t.Fatalf("err = %v, want auth_failed", err)
 	}
 	if stub.closed != 1 {
 		t.Fatalf("a failed stream was not closed (closed=%d)", stub.closed)
@@ -180,7 +186,8 @@ func TestSendAIRequestStreamSurfacesTransportFailure(t *testing.T) {
 	core := newAIStreamCore(t, stub)
 	defer core.Close()
 	_, err := core.SendAIRequestStream(core.NewCall(), aiStreamConfig, aiStreamBody)
-	if err == nil || !strings.Contains(err.Error(), "client read failed") {
+	var failure *aiapi.ProviderError
+	if !errors.As(err, &failure) || failure.Code != aiapi.ErrCodeUpstream || strings.Contains(err.Error(), "mock-private-transport-detail") {
 		t.Fatalf("err = %v", err)
 	}
 }

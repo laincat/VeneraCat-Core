@@ -49,6 +49,7 @@ type streamRequest struct {
 	URL        string      `json:"url"`
 	Headers    http.Header `json:"headers,omitempty"`
 	BodyBase64 string      `json:"bodyBase64,omitempty"`
+	Cookies    bool        `json:"cookies"`
 	Partition  string      `json:"partition,omitempty"`
 }
 
@@ -102,12 +103,6 @@ type streamAnswer struct {
 
 func (a *streamAnswer) pluginResponse() *magpieplugin.Response {
 	return &magpieplugin.Response{Status: a.Status, StatusText: http.StatusText(a.Status), Header: a.Header, URL: a.URL}
-}
-
-// send is the part both callers share. The partition is a parameter because a
-// plugin request and a standard AI request must not read each other's cookies.
-func (s *streamBridge) send(ctx context.Context, partition, method, target string, header http.Header, body []byte, onChunk func([]byte) error) (*streamAnswer, error) {
-	return s.sendWithHead(ctx, partition, method, target, header, body, nil, onChunk)
 }
 
 func (s *streamBridge) sendWithHead(ctx context.Context, partition, method, target string, header http.Header, body []byte, onHead func(*streamAnswer) error, onChunk func([]byte) error) (*streamAnswer, error) {
@@ -203,7 +198,7 @@ func (s *streamBridge) sendWithHead(ctx context.Context, partition, method, targ
 			return nil, fmt.Errorf("mobile: host stream chunk: %w", err)
 		}
 		if err := acceptHead(chunk); err != nil {
-			return nil, err
+			return answer, err
 		}
 		if chunk.Error != "" {
 			return nil, errors.New(chunk.Error)
@@ -214,7 +209,7 @@ func (s *streamBridge) sendWithHead(ctx context.Context, partition, method, targ
 				return nil, fmt.Errorf("mobile: host stream body: %w", err)
 			}
 			if err := onChunk(body); err != nil {
-				return nil, err
+				return answer, err
 			}
 		}
 		if chunk.Done {

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/laincat/veneracat-core/aiapi"
 	"github.com/laincat/veneracat-core/host"
 	"github.com/laincat/veneracat-core/magpieplugin"
 )
@@ -568,6 +569,7 @@ func (m *Magpie) ChatStart(model, messagesJSON, system string, maxTokens int) (s
 	go func() {
 		defer close(stream.events)
 		defer stream.cancel()
+		sentError := false
 		err := inst.Chat(ctx, req, func(e magpieplugin.Event) error {
 			body, marshalErr := chatEventJSON(e)
 			if marshalErr != nil {
@@ -575,13 +577,19 @@ func (m *Magpie) ChatStart(model, messagesJSON, system string, maxTokens int) (s
 			}
 			select {
 			case stream.events <- body:
+				sentError = e.Kind == magpieplugin.EventError
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 		})
-		if err != nil && ctx.Err() == nil {
-			body, _ := json.Marshal(map[string]string{"kind": "error", "text": err.Error()})
+		if err != nil && !sentError && ctx.Err() == nil {
+			pe := aiapi.ClassifyError("", err)
+			body, _ := json.Marshal(map[string]any{
+				"kind":  "error",
+				"text":  pe.Error(),
+				"error": pe,
+			})
 			select {
 			case stream.events <- string(body):
 			case <-ctx.Done():
@@ -662,10 +670,20 @@ func chatEventJSON(e magpieplugin.Event) (string, error) {
 		payload["outcome"] = string(e.Outcome)
 	}
 	if e.Usage != nil {
-		payload["usage"] = map[string]any{
+		counts := make(map[string]any, 4)
+		for key, count := range map[string]json.Number{
 			"input": e.Usage.Input, "output": e.Usage.Output,
 			"cacheRead": e.Usage.CacheRead, "cacheWrite": e.Usage.CacheWrite,
+		} {
+			counts[key] = nil
+			if count != "" {
+				counts[key] = count
+			}
 		}
+		payload["usage"] = counts
+	}
+	if e.Error != nil {
+		payload["error"] = e.Error
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

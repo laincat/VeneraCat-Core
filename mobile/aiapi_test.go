@@ -10,6 +10,46 @@ import (
 
 const aiKey = "sk-test-key-not-a-real-secret"
 
+type aiMaskerStub struct{}
+
+func (aiMaskerStub) APIVersion() string { return "aiapi-ext/1" }
+func (aiMaskerStub) MaskRequest(_, body string) (string, error) {
+	return strings.ReplaceAll(body, "private content", "[MASK]"), nil
+}
+func (aiMaskerStub) RestoreBody(body string) (string, error) {
+	return strings.ReplaceAll(body, "[MASK]", "private content"), nil
+}
+func (aiMaskerStub) RestoreDelta(_, text string, _ bool) (string, error) { return text, nil }
+
+func TestRunAIRequestRequiresAndCallsMasker(t *testing.T) {
+	c, err := New("{}", aiHost(`{"choices":[{"message":{"content":"[MASK]"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9007199254740993}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	config := `{"protocol":"chat","apiKey":"mock-key","requireMasking":true}`
+	body := `{"model":"m","messages":[{"role":"user","content":"private content"}]}`
+	failure, err := c.RunAIRequest(c.NewCall(), config, body, false, nil)
+	if err != nil || !strings.Contains(failure, `"code":"masking_failed"`) || strings.Contains(failure, "private content") {
+		t.Fatalf("missing masker: %s, %v", failure, err)
+	}
+	out, err := c.RunAIRequest(c.NewCall(), config, body, false, aiMaskerStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply aiResponse
+	if err := json.Unmarshal([]byte(out), &reply); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := base64.StdEncoding.DecodeString(reply.BodyBase64)
+	if err != nil || reply.Status != 200 || reply.FinishReason != "stop" || !strings.Contains(string(restored), "private content") {
+		t.Fatalf("masked response = %s, %v", out, err)
+	}
+	if reply.UsageEvent == nil || reply.Usage.InputTokens.String() != "9007199254740993" || reply.Usage.OutputTokens != nil {
+		t.Fatalf("usage = %s", out)
+	}
+}
+
 func aiHost(answer string) *fakeHost {
 	h := &fakeHost{routes: map[string]string{}, data: map[string]string{}}
 	h.routes["https://api.openai.com/v1/chat/completions"] = answer

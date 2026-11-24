@@ -58,6 +58,9 @@ func (in *Instance) Checkin(provider string) (*CheckinResult, error) {
 	if !ok {
 		return nil, errors.New("magpieplugin: the check-in answered nothing")
 	}
+	if raw["failure"] == "no_checkin" {
+		return nil, errors.New("magpieplugin: the package declares no check-in")
+	}
 	declared := usageText(raw["outcome"])
 	result := &CheckinResult{
 		Outcome: CheckinOutcome(declared),

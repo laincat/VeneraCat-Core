@@ -1,10 +1,10 @@
 package mobile
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -12,21 +12,20 @@ import (
 	"github.com/laincat/veneracat-core/host"
 )
 
-// aiConfig is the JSON a client passes to build a standard AI request:
-// {"protocol":"chat|responses|messages","baseUrl":"","apiKey":"...",
-//
-//	"anthropicVersion":"","partition":""}.
 type aiConfig struct {
 	Protocol         aiapi.Protocol `json:"protocol"`
 	BaseURL          string         `json:"baseUrl"`
 	APIKey           string         `json:"apiKey"`
 	AnthropicVersion string         `json:"anthropicVersion"`
 	Partition        string         `json:"partition"`
+	RequireMasking   bool           `json:"requireMasking"`
 }
 
-// aiRequest is the wire form of a built request. It matches what Host.HTTP
-// takes, minus the id: the client decides whether to send it through Core's
-// own bridge or on its own connection.
+func (raw aiConfig) standardConfig() aiapi.Config {
+	return aiapi.Config{Protocol: raw.Protocol, BaseURL: raw.BaseURL, APIKey: raw.APIKey,
+		AnthropicVersion: raw.AnthropicVersion, Partition: raw.Partition}
+}
+
 type aiRequest struct {
 	Method     string      `json:"method"`
 	URL        string      `json:"url"`
@@ -36,174 +35,249 @@ type aiRequest struct {
 	Partition  string      `json:"partition,omitempty"`
 }
 
-// aiResponse is the wire form of an answer.
 type aiResponse struct {
-	Status     int         `json:"status"`
-	Headers    http.Header `json:"headers"`
-	BodyBase64 string      `json:"bodyBase64"`
-	FinalURL   string      `json:"finalUrl"`
+	Status       int                  `json:"status"`
+	Headers      http.Header          `json:"headers"`
+	BodyBase64   string               `json:"bodyBase64"`
+	FinalURL     string               `json:"finalUrl"`
+	FinishReason string               `json:"finishReason,omitempty"`
+	FinishDetail string               `json:"finishDetail,omitempty"`
+	Outcome      aiapi.FinishReason   `json:"outcome,omitempty"`
+	Usage        *aiapi.TokenUsage    `json:"usage"`
+	Error        *aiapi.ProviderError `json:"error,omitempty"`
+	UsageEvent   *aiapi.UsageEvent    `json:"usageEvent,omitempty"`
 }
 
-func configFromJSON(configJSON string) (aiapi.Config, error) {
+type aiStreamResponse struct {
+	Status       int                `json:"status"`
+	Headers      http.Header        `json:"headers"`
+	Text         string             `json:"text"`
+	Reasoning    string             `json:"reasoning,omitempty"`
+	FinishReason string             `json:"finishReason,omitempty"`
+	FinishDetail string             `json:"finishDetail,omitempty"`
+	Outcome      aiapi.FinishReason `json:"outcome,omitempty"`
+	Usage        *aiapi.TokenUsage  `json:"usage"`
+	FinalURL     string             `json:"finalUrl"`
+	Streamed     bool               `json:"streamed"`
+	UsageEvent   *aiapi.UsageEvent  `json:"usageEvent,omitempty"`
+}
+
+func configFromJSON(configJSON string) (aiConfig, error) {
 	var raw aiConfig
 	if err := json.Unmarshal([]byte(configJSON), &raw); err != nil {
-		return aiapi.Config{}, errors.New("mobile: invalid AI config JSON")
+		return aiConfig{}, errors.New("mobile: invalid AI config JSON")
 	}
-	return aiapi.Config{
-		Protocol:         raw.Protocol,
-		BaseURL:          raw.BaseURL,
-		APIKey:           raw.APIKey,
-		AnthropicVersion: raw.AnthropicVersion,
-		Partition:        raw.Partition,
-	}, nil
+	return raw, nil
+}
+
+func guardAI(err *error) {
+	if recover() != nil {
+		*err = errors.New("mobile: internal AI error")
+	}
 }
 
 func toWire(r *host.Request) aiRequest {
-	out := aiRequest{Method: r.Method, URL: r.URL, Headers: r.Header, Cookies: r.Cookies, Partition: r.Partition}
-	if len(r.Body) > 0 {
-		out.BodyBase64 = base64.StdEncoding.EncodeToString(r.Body)
-	}
-	return out
+	return aiRequest{Method: r.Method, URL: r.URL, Headers: r.Header, Cookies: r.Cookies, Partition: r.Partition,
+		BodyBase64: base64.StdEncoding.EncodeToString(r.Body)}
 }
 
-// BuildAIRequest builds a request for one of the standard protocols without
-// sending it. The client may send it itself, or use SendAIRequest.
-//
-// The body is the protocol's own JSON object. It is carried as written, so a
-// client can build tools, images and vendor fields without Core rewriting
-// them. The answer repeats the credential header: the client holds the key
-// already, and Core does not keep it.
+// BuildAIRequest returns a standard request for a client-owned transport.
+// The returned headers carry the caller's credential and must be kept private.
 func (c *Core) BuildAIRequest(configJSON, bodyJSON string) (_ string, err error) {
 	defer guard(&err)
 	cfg, err := configFromJSON(configJSON)
 	if err != nil {
 		return "", err
 	}
-	request, err := aiapi.BuildRequest(cfg, json.RawMessage(bodyJSON))
+	if cfg.RequireMasking {
+		return "", &aiapi.ProviderError{Code: aiapi.ErrCodeMaskingFailed, Message: "required masking needs RunAIRequest"}
+	}
+	request, err := aiapi.BuildRequest(cfg.standardConfig(), json.RawMessage(bodyJSON))
 	if err != nil {
 		return "", err
 	}
 	return encode(toWire(request))
 }
 
-// BuildAIModelsRequest builds the model-list request for the same root and
-// credentials. It is a GET without a body.
+// BuildAIModelsRequest returns a model-list GET request.
 func (c *Core) BuildAIModelsRequest(configJSON string) (_ string, err error) {
 	defer guard(&err)
 	cfg, err := configFromJSON(configJSON)
 	if err != nil {
 		return "", err
 	}
-	request, err := aiapi.BuildModelsRequest(cfg)
+	request, err := aiapi.BuildModelsRequest(cfg.standardConfig())
 	if err != nil {
 		return "", err
 	}
 	return encode(toWire(request))
 }
 
-// SendAIRequest builds a standard request and performs it through the client's
-// own transport. The answer carries the body as base64 so exact bytes and
-// key order survive.
-//
-// This is the whole-response path. Even if the body asks for "stream":true,
-// this method returns the whole response and reports Streamed=false.
-// SendAIRequestStream uses the optional chunked transport instead.
+// AIContentMasker is an optional aiapi-ext/1 callback object for one request.
+// The client keeps the restoration state in this object. RestoreDelta is called
+// separately for text and reasoning, with final=true at protocol completion.
+type AIContentMasker interface {
+	APIVersion() string
+	MaskRequest(protocol, bodyJSON string) (string, error)
+	RestoreBody(bodyJSON string) (string, error)
+	RestoreDelta(kind, text string, final bool) (string, error)
+}
+
+type aiMasker struct{ client AIContentMasker }
+
+func (m aiMasker) APIVersion() string { return m.client.APIVersion() }
+
+func (m aiMasker) MaskRequest(_ context.Context, protocol aiapi.Protocol, body json.RawMessage) (json.RawMessage, aiapi.MaskSession, error) {
+	masked, err := m.client.MaskRequest(string(protocol), string(body))
+	return json.RawMessage(masked), m, err
+}
+
+func (m aiMasker) RestoreBody(body json.RawMessage) (json.RawMessage, error) {
+	restored, err := m.client.RestoreBody(string(body))
+	return json.RawMessage(restored), err
+}
+
+func (m aiMasker) RestoreDelta(kind aiapi.StreamEventKind, text string, final bool) (string, error) {
+	return m.client.RestoreDelta(string(kind), text, final)
+}
+
+type mobileAIStreamTransport struct{ bridge *streamBridge }
+
+func (t mobileAIStreamTransport) DoStream(ctx context.Context, req *host.Request, onHead func(*host.Response) error, onChunk func([]byte) error) (*host.Response, error) {
+	asResponse := func(head *streamAnswer) *host.Response {
+		return &host.Response{Status: head.Status, Header: head.Header, FinalURL: head.URL}
+	}
+	answer, err := t.bridge.sendWithHead(ctx, req.Partition, req.Method, req.URL, req.Header, req.Body,
+		func(head *streamAnswer) error { return onHead(asResponse(head)) }, onChunk)
+	if answer == nil {
+		return nil, err
+	}
+	return asResponse(answer), err
+}
+
+// SendAIRequest performs a bounded whole-response call. For HTTP failures, the
+// legacy status response contains a structured error and an empty bodyBase64.
 func (c *Core) SendAIRequest(callID int64, configJSON, bodyJSON string) (_ string, err error) {
-	defer guard(&err)
+	defer guardAI(&err)
 	defer c.endCall(callID)
+	return c.runAIRequest(callID, configJSON, bodyJSON, false, nil, true)
+}
+
+// SendAIRequestStream collects a streamed standard AI answer through HostStream.
+func (c *Core) SendAIRequestStream(callID int64, configJSON, bodyJSON string) (_ string, err error) {
+	defer guardAI(&err)
+	defer c.endCall(callID)
+	return c.runAIRequest(callID, configJSON, bodyJSON, true, nil, true)
+}
+
+// RunAIRequest executes a standard request using the optional per-call masker.
+// Request and provider failures are returned in JSON with an error object.
+func (c *Core) RunAIRequest(callID int64, configJSON, bodyJSON string, streamed bool, masker AIContentMasker) (_ string, err error) {
+	defer guardAI(&err)
+	defer c.endCall(callID)
+	return c.runAIRequest(callID, configJSON, bodyJSON, streamed, masker, false)
+}
+
+func (c *Core) runAIRequest(callID int64, configJSON, bodyJSON string, streamed bool, masker AIContentMasker, legacy bool) (string, error) {
 	cfg, err := configFromJSON(configJSON)
 	if err != nil {
-		return "", err
+		if legacy {
+			return "", err
+		}
+		return encode(map[string]any{"error": &aiapi.ProviderError{Code: aiapi.ErrCodeInvalidRequest, Message: "invalid AI config JSON"}})
 	}
-	request, err := aiapi.BuildRequest(cfg, json.RawMessage(bodyJSON))
-	if err != nil {
-		return "", err
+	pipeline := aiapi.Pipeline{Transport: c.bridge, AllowRawResponse: legacy}
+	if c.stream != nil {
+		pipeline.StreamTransport = mobileAIStreamTransport{bridge: &streamBridge{h: c.stream, assign: nextHostRequestID}}
+	}
+	if masker != nil {
+		pipeline.Extensions.Masker = aiMasker{client: masker}
 	}
 	ctx, done := c.ctx(callID)
 	defer done()
-	response, err := c.bridge.Do(ctx, request)
-	if err != nil {
-		return "", err
+	var result *aiapi.CallResult
+	meta := aiapi.RequestMeta{RequireMasking: cfg.RequireMasking}
+	if streamed {
+		result, err = pipeline.DoStream(ctx, cfg.standardConfig(), json.RawMessage(bodyJSON), nil, meta)
+	} else {
+		result, err = pipeline.Do(ctx, cfg.standardConfig(), json.RawMessage(bodyJSON), meta)
 	}
-	out := aiResponse{Status: response.Status, Headers: response.Header, FinalURL: response.FinalURL}
-	out.BodyBase64 = base64.StdEncoding.EncodeToString(response.Body)
-	answer := struct {
+	var failure *aiapi.ProviderError
+	if err != nil {
+		if legacy && (streamed || result == nil || result.Status == 0) {
+			return "", err
+		}
+		if !errors.As(err, &failure) {
+			failure = &aiapi.ProviderError{Code: aiapi.ErrCodeInvalidRequest, Message: "invalid AI request"}
+		}
+		if result == nil {
+			result = &aiapi.CallResult{Streamed: streamed}
+		}
+	}
+	if streamed {
+		return encode(struct {
+			aiStreamResponse
+			Error *aiapi.ProviderError `json:"error,omitempty"`
+		}{aiStreamResponse: aiStreamResponse{
+			Status: result.Status, Headers: result.Header, Text: result.Text, Reasoning: result.Reasoning,
+			FinishReason: result.FinishReason, FinishDetail: result.FinishDetail, Outcome: result.Outcome, Usage: result.Usage,
+			FinalURL: result.FinalURL, Streamed: true, UsageEvent: result.UsageEvent,
+		}, Error: failure})
+	}
+	return encode(struct {
 		aiResponse
 		Streamed bool `json:"streamed"`
-	}{aiResponse: out, Streamed: false}
-	encoded, err := json.Marshal(answer)
-	if err != nil {
-		return "", err
-	}
-	return string(encoded), nil
+	}{aiResponse: aiResponse{
+		Status: result.Status, Headers: result.Header, BodyBase64: base64.StdEncoding.EncodeToString(result.Body),
+		FinalURL: result.FinalURL, FinishReason: result.FinishReason, FinishDetail: result.FinishDetail, Outcome: result.Outcome,
+		Usage: result.Usage, Error: failure, UsageEvent: result.UsageEvent,
+	}})
 }
 
-// aiStreamResponse is a streamed standard answer.
-//
-// Text is what the events added up to. A successful result requires both a
-// successful HTTP status and the protocol's completion event. Failed, cancelled
-// or truncated requests return an error instead of an incomplete answer.
-type aiStreamResponse struct {
-	Status   int         `json:"status"`
-	Headers  http.Header `json:"headers"`
-	Text     string      `json:"text"`
-	FinalURL string      `json:"finalUrl"`
-	Streamed bool        `json:"streamed"`
-}
-
-// SendAIRequestStream performs a standard request and returns the answer's text
-// as the provider produced it.
-//
-// It needs a Core built with NewWithStream, and a body that says
-// "stream": true. Deltas are collected here, so a caller gets the whole text at
-// the end without a callback; a caller that wants to paint text while it
-// arrives keeps using BuildAIRequest on its own connection.
-func (c *Core) SendAIRequestStream(callID int64, configJSON, bodyJSON string) (_ string, err error) {
+// ClassifyAIHTTPError classifies a provider's HTTP error for a client that
+// sends BuildAIRequest using its own network bridge.
+func ClassifyAIHTTPError(protocol string, status int, headersJSON, bodyBase64 string) (_ string, err error) {
 	defer guard(&err)
-	defer c.endCall(callID)
-	cfg, err := configFromJSON(configJSON)
+	if _, err := aiapi.NewStreamDecoder(aiapi.Protocol(protocol)); err != nil {
+		return "", err
+	}
+	var hdr http.Header
+	if strings.TrimSpace(headersJSON) != "" && json.Unmarshal([]byte(headersJSON), &hdr) != nil {
+		return "", errors.New("mobile: invalid AI headers JSON")
+	}
+	body, err := base64.StdEncoding.DecodeString(bodyBase64)
+	if err != nil {
+		return "", errors.New("mobile: invalid AI error body base64")
+	}
+	return encode(aiapi.ClassifyHTTPResponse(aiapi.Protocol(protocol), status, hdr, body))
+}
+
+// ResolveAIRoute returns the eligible candidate IDs in caller order.
+func ResolveAIRoute(inputJSON string) (_ string, err error) {
+	defer guard(&err)
+	var input aiapi.RouteInput
+	if json.Unmarshal([]byte(inputJSON), &input) != nil {
+		return "", errors.New("mobile: invalid AI route input JSON")
+	}
+	decision, err := aiapi.ResolveRoute(context.Background(), nil, input)
 	if err != nil {
 		return "", err
 	}
-	request, err := aiapi.BuildRequest(cfg, json.RawMessage(bodyJSON))
+	return encode(decision)
+}
+
+// ValidateAIRouteDecision checks a mobile extension's ranking against its
+// input snapshot. The client resolves credentials for the selected ID.
+func ValidateAIRouteDecision(inputJSON, decisionJSON string) (_ string, err error) {
+	defer guard(&err)
+	var input aiapi.RouteInput
+	var decision aiapi.RouteDecision
+	if json.Unmarshal([]byte(inputJSON), &input) != nil || json.Unmarshal([]byte(decisionJSON), &decision) != nil {
+		return "", errors.New("mobile: invalid AI route JSON")
+	}
+	decision, err = aiapi.ValidateRouteDecision(input, decision)
 	if err != nil {
 		return "", err
 	}
-	if err := aiapi.RequireStream(json.RawMessage(bodyJSON)); err != nil {
-		return "", err
-	}
-	request.Header.Set("Accept", "text/event-stream")
-	decoder, err := aiapi.NewStreamDecoder(cfg.Protocol)
-	if err != nil {
-		return "", err
-	}
-	ctx, done := c.ctx(callID)
-	defer done()
-	bridge := &streamBridge{h: c.stream, assign: nextHostRequestID}
-	var text strings.Builder
-	answer, err := bridge.send(ctx, cfg.Partition, request.Method, request.URL, request.Header, request.Body,
-		func(chunk []byte) error {
-			deltas, err := decoder.Push(chunk)
-			if err != nil {
-				return err
-			}
-			for _, delta := range deltas {
-				text.WriteString(delta)
-			}
-			return nil
-		})
-	if err != nil {
-		return "", err
-	}
-	if answer.Status < http.StatusOK || answer.Status >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("mobile: AI stream returned HTTP %d", answer.Status)
-	}
-	if !decoder.Done() {
-		return "", errors.New("mobile: AI stream ended before completion")
-	}
-	out := aiStreamResponse{
-		Status: answer.Status, Headers: answer.Header, Text: text.String(),
-		FinalURL: answer.URL, Streamed: true,
-	}
-	return encode(out)
+	return encode(decision)
 }

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/MoeForge/moejs"
+	"github.com/laincat/veneracat-core/aiapi"
 )
 
 // pluginGlue builds the bridge inside the package's runtime. It is written as
@@ -165,7 +166,7 @@ const pluginGlue = `globalThis.__magpie = (() => {
   async function chatPrepare(arg) {
     const p = await plugin()
     const a = p?.auth
-    if (!a || typeof a.loader !== "function") throw new Error("this package declares no loader")
+    if (!a || typeof a.loader !== "function") return { failure: "no_loader" }
     const provider = typeof a.provider === "string" ? a.provider : ""
     const getAuth = async () => globalThis.__magpieClient.auth.get({ path: { id: provider } })
     const options = await a.loader(getAuth, { models: {} })
@@ -178,6 +179,14 @@ const pluginGlue = `globalThis.__magpie = (() => {
     // have to guess from the URL.
     const dialect = typeof options.dialect === "string" && options.dialect ? options.dialect : "chat"
     return { baseURL: String(options.baseURL), dialect }
+  }
+
+  async function httpFailure(response) {
+    let text = ""
+    try { text = await response.text() } catch (e) {}
+    return { status: response.status, ok: false, body: text.slice(0, 16384),
+             retryAfter: response.headers?.get?.("retry-after"),
+             retryAfterMs: response.headers?.get?.("retry-after-ms") }
   }
 
   async function chatRun(arg) {
@@ -197,11 +206,7 @@ const pluginGlue = `globalThis.__magpie = (() => {
       headers,
       body: arg?.body ?? "",
     })
-    if (!response.ok) {
-      let text = ""
-      try { text = await response.text() } catch (e) {}
-      return { status: response.status, ok: false, body: text.slice(0, 200) }
-    }
+    if (!response.ok) return await httpFailure(response)
     if (!response.body) {
       // A client that cannot stream hands the reply over whole; the reader
       // treats it the same, so the events do not depend on that capability.
@@ -229,11 +234,7 @@ const pluginGlue = `globalThis.__magpie = (() => {
     if (!options) throw new Error("chat is not prepared yet")
     const url = arg?.url || (options.baseURL + "/models")
     const response = await options.fetch(url, { method: "GET", headers: { Accept: "application/json" } })
-    if (!response.ok) {
-      let text = ""
-      try { text = await response.text() } catch (e) {}
-      return { status: response.status, ok: false, body: text.slice(0, 200) }
-    }
+    if (!response.ok) return await httpFailure(response)
     return { status: response.status, ok: true, body: await response.json() }
   }
 
@@ -242,7 +243,7 @@ const pluginGlue = `globalThis.__magpie = (() => {
   async function checkin(arg) {
     const p = await plugin()
     const a = p?.auth
-    if (typeof a?.checkin !== "function") throw new Error("this package declares no check-in")
+    if (typeof a?.checkin !== "function") return { failure: "no_checkin" }
     const provider = typeof a.provider === "string" ? a.provider : ""
     const getAuth = async () => globalThis.__magpieClient.auth.get({ path: { id: provider } })
     return await a.checkin(getAuth, arg?.provider ?? provider)
@@ -376,7 +377,15 @@ func (in *Instance) hook(name string, argJSON string) (any, error) {
 		}
 		arg = parsed
 	}
-	return in.callValue(name, fn, arg)
+	result, err := in.callValue(name, fn, arg)
+	if err != nil {
+		operation := name
+		if name == "checkin" {
+			operation = "check-in"
+		}
+		return nil, fmt.Errorf("magpieplugin: %s: %w", operation, aiapi.ClassifyError("", err))
+	}
+	return result, nil
 }
 
 // SetPluginOptions hands the plugin its own switches: key "provider|option" to

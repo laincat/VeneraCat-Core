@@ -103,6 +103,59 @@ func AIStreamPush(handleText, chunkBase64 string) (_ string, err error) {
 	return encode(deltas)
 }
 
+// AIStreamPushEvents feeds one base64 piece of the body and returns all
+// structured aiapi.StreamEvent objects it completed, as a JSON array.
+// Unlike AIStreamPush (which only returns text deltas), this preserves
+// reasoning deltas, raw and normalized finish reasons, nullable token usage,
+// and structured provider error events.
+func AIStreamPushEvents(handleText, chunkBase64 string) (_ string, err error) {
+	defer guard(&err)
+	stream, err := lockAIStream(handleText)
+	if err != nil {
+		return "", err
+	}
+	defer stream.mu.Unlock()
+	raw, err := base64.StdEncoding.DecodeString(chunkBase64)
+	if err != nil {
+		return "", fmt.Errorf("mobile: the piece is not base64: %v", err)
+	}
+	events, err := stream.decoder.PushEvents(raw)
+	if err != nil {
+		return "", err
+	}
+	if events == nil {
+		events = []aiapi.StreamEvent{}
+	}
+	return encode(events)
+}
+
+// AIStreamState reports the decoder's accumulated completion state as JSON:
+// {"done":bool,"finishReason":"...","finishDetail":"...","outcome":"...","usage":...|null,"error":...}.
+func AIStreamState(handleText string) (_ string, err error) {
+	defer guard(&err)
+	stream, err := lockAIStream(handleText)
+	if err != nil {
+		return "", err
+	}
+	defer stream.mu.Unlock()
+	state := struct {
+		Done         bool                 `json:"done"`
+		FinishReason string               `json:"finishReason,omitempty"`
+		FinishDetail string               `json:"finishDetail,omitempty"`
+		Outcome      aiapi.FinishReason   `json:"outcome,omitempty"`
+		Usage        *aiapi.TokenUsage    `json:"usage"`
+		Error        *aiapi.ProviderError `json:"error,omitempty"`
+	}{
+		Done:         stream.decoder.Done(),
+		FinishReason: stream.decoder.FinishReason(),
+		FinishDetail: stream.decoder.FinishDetail(),
+		Outcome:      stream.decoder.Outcome(),
+		Usage:        stream.decoder.Usage(),
+		Error:        stream.decoder.Error(),
+	}
+	return encode(state)
+}
+
 // AIStreamDone reports whether the answer said it was complete, as "true" or
 // "false".
 func AIStreamDone(handleText string) (_ string, err error) {

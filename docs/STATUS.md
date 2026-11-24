@@ -12,13 +12,13 @@
 | 小说与改编 | `novel` 与 `plugin` 提供 Wave 4A 小说源运行时（共享 `comic:<key>` Cookie 分区与独立 MoeJS 实例），`gohost` 与 `mobile` 暴露 `NovelPopular`、`NovelSearch`、`NovelDetail` 与 `NovelChapter`。`novel/adapt` 提供 Wave 4B-1/4B-2 管线：章节 HTML 抽取分块、严格分镜 JSON 校验、跨章角色表合并、多 chunk 断点续跑（`AdaptCheckpoint`）、预算熔断（`ErrBudgetExceeded`），以及基于 Gemini / OpenAI Images 的静态漫画单格与整章渲染（支持本地画风/角色参考图、`ForceRerender` 断点续画与 `ErrContentBlocked` 不重试）。 |
 | 备份 | `backup` 读取官方 `.venera` 并生成可选择的恢复计划。Cookie 优先恢复到备份内的源分区。无源脚本时回退到已安装分区，实际写入由客户端确认并完成。参见 [备份规格](VENERA-BACKUP.md)。 |
 | 服务 | `service` 安装、升级和删除服务包，普通 KV 保存在包外，账号值由客户端持有。移动端会话运行器绑定宿主，管理常驻、取消和版本失效。参见 [服务契约](SERVICE-PLUGINS.md)。 |
-| AI | `aiapi` 构造 OpenAI Chat/Responses 和 Anthropic Messages 请求，提供文本 SSE 增量解码。`magpieplugin` 通过供应商包自己的宿主路径处理登录、模型、用量与聊天，保留原始结束原因和归一结果。参见 [标准 API](AIAPI.md) 与 [Magpie 兼容性](MAGPIE-COMPATIBILITY.md)。 |
+| AI | `aiapi` 内置 OpenAI Chat/Responses 和 Anthropic Messages 请求及执行入口，与 `magpieplugin` 共用结构化错误和 SSE 解码。会话可提供文本、推理、原始结束原因与可空 token 用量。`aiapi-ext/1` 定义可选路由、用量观察与内容脱敏，普通调用直接使用客户端提供的标准账号和模型。参见 [标准 API](AIAPI.md) 与 [Magpie 兼容性](MAGPIE-COMPATIBILITY.md)。 |
 | 宿主与移动桥 | `gohost`（桌面 Go 宿主）与 `mobile`（gomobile JSON 桥）统一暴露漫画、视频、小说四入口及 Wave 4B 改编渲染出口（`AdaptChapter`、`RenderPanel`、`RenderStoryboard`，严格经 `host.Transport` 且 `Cookies: false`，无环境变量读取）。移动端复用 `callID` 取消传播，整包、分段 HTTP 和服务共用宿主请求 ID。发布新 Core 后，各客户端更新自己的 pin 和构建产物。 |
 
 ## 已知限制
 
 - MoeJS 的全局 `atob` 不可重定义，单次调用表达式有 256 寄存器窗口，`Intl` 只实现子集。复现见 `comic/js/compatibility_limits_test.go`。GBK 使用 `Convert.decodeGbk`，差异见 [GBK 兼容边界](GBK-COMPATIBILITY.md)。
-- Magpie 的 Node、Bun 和系统进程模块需要额外宿主能力。标准 AI decoder 输出文本，供应商插件可提供 reasoning、usage 和结束原因。未知用量保持未知，客户端解码需接受可空字段。
+- Magpie 的 Node、Bun 和系统进程模块需要额外宿主能力。标准 AI 的事件投影覆盖文本、推理、用量与结束状态。客户端仍可读取原生整包响应来处理工具调用和多模态字段。
 - 服务的 `fetch` 在 Go 宿主回调中阻塞。调用内已结算的 Promise 可读取，仍在等待的 handler 会明确报错。
 
 ## 验收入口
@@ -32,7 +32,7 @@
 ## 待办地图
 
 - 桌面端与 iOS 端接入 Wave 4A 小说阅读器，以及 Wave 4B 分镜断点续跑、本地参考图与静态漫画单格/整章渲染 UI 和本地持久化存储。
-- 补足结构化供应商错误、完整原生事件和 [策略、用量观察与脱敏接口](AI-CORE-BOUNDARY.md)。
+- 在客户端接入结构化 AI 错误、流式推理和 `aiapi-ext/1` 扩展。按包验证原版 Magpie 策略及中间件 ABI 的兼容性，并持续验收真实账号、设备首块和取消。
 - 测量真实 App 的框架体积、每源运行时内存、图片回调及 JSON/base64 复制峰值，再决定是否需要低拷贝入口。依赖漏洞扫描单独验收。
 - 客户端逐步采用会话服务运行器和共享 KV，联动处理漫画评论与链接契约、宿主接口拆分。真机另验真实账户、网站验证、流式首块和取消。
 - 视频下载、离线缓存、弹幕和 AniBaka `anx-rule/2` 规则仍待实现。`.venera` 的历史 Dart 哈希需要独立 VM 对照。

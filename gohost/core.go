@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/laincat/veneracat-core/aiapi"
 	"github.com/laincat/veneracat-core/comic/hostapi"
 	coreimage "github.com/laincat/veneracat-core/comic/image"
 	"github.com/laincat/veneracat-core/comic/js"
@@ -90,6 +91,9 @@ type Core struct {
 	// search, for a source that pages by cursor rather than by page number.
 	mu      sync.Mutex
 	cursors map[string]map[int]string
+
+	aiExtMu sync.RWMutex
+	aiExt   aiapi.Extensions
 }
 
 // Open assembles Core. Close it when the app quits.

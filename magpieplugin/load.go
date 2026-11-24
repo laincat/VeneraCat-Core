@@ -14,6 +14,7 @@ import (
 	"github.com/MoeForge/moejs"
 	"github.com/MoeForge/moejs/eventloop"
 	"github.com/MoeForge/moejs/webapi"
+	"github.com/laincat/veneracat-core/aiapi"
 )
 
 // DefaultMemoryLimit bounds one plugin instance. Providers hold model lists
@@ -234,7 +235,11 @@ func (in *Instance) Call(export string, arg any) (any, error) {
 		}
 		argValue = converted
 	}
-	return in.callValue(export, fn, argValue)
+	result, err := in.callValue(export, fn, argValue)
+	if err != nil {
+		return nil, aiapi.ClassifyError("", err)
+	}
+	return result, nil
 }
 
 // callValue is Call's body, for callers that already hold a JavaScript
