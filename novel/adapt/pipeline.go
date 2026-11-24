@@ -33,22 +33,28 @@ type TextGenerator interface {
 }
 
 // AIAPIGenerator adapts aiapi (chat, responses, messages) + host.Transport to
-// TextGenerator.
+// TextGenerator. It is safe for concurrent use once configured.
 type AIAPIGenerator struct {
 	Config    aiapi.Config
 	Model     string
 	MaxTokens int
-	Transport host.Transport
+	// Temperature is optional; nil omits the parameter (recommended for
+	// reasoning models such as DeepSeek Reasoner and Codex).
+	Temperature *float64
+	// JSONMode requests JSON object output when supported by the target
+	// protocol (chat: response_format.type="json_object"; responses:
+	// text.format.type="json_object").
+	JSONMode bool
+	// ReasoningEffort sets reasoning.effort on the Responses API when non-empty
+	// (for example "low", "medium", "high").
+	ReasoningEffort string
+	Transport       host.Transport
 }
 
 // BuildRequest builds a protocol-native host.Request via aiapi.BuildRequest.
 func (g *AIAPIGenerator) BuildRequest(req GenerateRequest) (*host.Request, error) {
 	if strings.TrimSpace(g.Model) == "" {
 		return nil, errors.New("adapt: aiapi model is required")
-	}
-	maxTokens := g.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 4096
 	}
 	var payload any
 	switch g.Config.Protocol {
@@ -58,10 +64,20 @@ func (g *AIAPIGenerator) BuildRequest(req GenerateRequest) (*host.Request, error
 			msgs = append(msgs, map[string]string{"role": "system", "content": req.System})
 		}
 		msgs = append(msgs, map[string]string{"role": "user", "content": req.Prompt})
-		payload = map[string]any{
+		body := map[string]any{
 			"model":    g.Model,
 			"messages": msgs,
 		}
+		if g.MaxTokens > 0 {
+			body["max_tokens"] = g.MaxTokens
+		}
+		if g.Temperature != nil {
+			body["temperature"] = *g.Temperature
+		}
+		if g.JSONMode {
+			body["response_format"] = map[string]string{"type": "json_object"}
+		}
+		payload = body
 	case aiapi.Responses:
 		body := map[string]any{
 			"model": g.Model,
@@ -70,8 +86,26 @@ func (g *AIAPIGenerator) BuildRequest(req GenerateRequest) (*host.Request, error
 		if req.System != "" {
 			body["instructions"] = req.System
 		}
+		if g.MaxTokens > 0 {
+			body["max_output_tokens"] = g.MaxTokens
+		}
+		if g.Temperature != nil {
+			body["temperature"] = *g.Temperature
+		}
+		if strings.TrimSpace(g.ReasoningEffort) != "" {
+			body["reasoning"] = map[string]string{"effort": strings.TrimSpace(g.ReasoningEffort)}
+		}
+		if g.JSONMode {
+			body["text"] = map[string]any{
+				"format": map[string]string{"type": "json_object"},
+			}
+		}
 		payload = body
 	case aiapi.Messages:
+		maxTokens := g.MaxTokens
+		if maxTokens <= 0 {
+			maxTokens = 4096
+		}
 		body := map[string]any{
 			"model":      g.Model,
 			"max_tokens": maxTokens,
@@ -81,6 +115,9 @@ func (g *AIAPIGenerator) BuildRequest(req GenerateRequest) (*host.Request, error
 		}
 		if req.System != "" {
 			body["system"] = req.System
+		}
+		if g.Temperature != nil {
+			body["temperature"] = *g.Temperature
 		}
 		payload = body
 	default:
@@ -93,7 +130,7 @@ func (g *AIAPIGenerator) BuildRequest(req GenerateRequest) (*host.Request, error
 	return aiapi.BuildRequest(g.Config, raw)
 }
 
-// ParseResponse extracts text and token usage from an aiapi protocol response.
+// ParseAIAPIResponse extracts text and token usage from an aiapi protocol response.
 func ParseAIAPIResponse(protocol aiapi.Protocol, status int, body []byte) (*GenerateResponse, error) {
 	if status < 200 || status >= 300 {
 		return nil, fmt.Errorf("adapt: aiapi HTTP %d: %s", status, strings.TrimSpace(string(body)))
@@ -103,7 +140,8 @@ func ParseAIAPIResponse(protocol aiapi.Protocol, status int, body []byte) (*Gene
 		var out struct {
 			Choices []struct {
 				Message struct {
-					Content string `json:"content"`
+					Content          json.RawMessage `json:"content"`
+					ReasoningContent string          `json:"reasoning_content"`
 				} `json:"message"`
 			} `json:"choices"`
 			Usage struct {
@@ -115,22 +153,36 @@ func ParseAIAPIResponse(protocol aiapi.Protocol, status int, body []byte) (*Gene
 		if err := json.Unmarshal(body, &out); err != nil {
 			return nil, fmt.Errorf("adapt: decode chat response: %w", err)
 		}
-		if len(out.Choices) == 0 || strings.TrimSpace(out.Choices[0].Message.Content) == "" {
+		if len(out.Choices) == 0 {
+			return nil, errors.New("adapt: chat response has empty choices")
+		}
+		text, err := extractChatMessageContent(out.Choices[0].Message.Content)
+		if err != nil {
+			return nil, fmt.Errorf("adapt: decode chat message content: %w", err)
+		}
+		if strings.TrimSpace(text) == "" {
 			return nil, errors.New("adapt: chat response has empty choices")
 		}
 		u := Usage{Calls: 1, InputTokens: out.Usage.PromptTokens, OutputTokens: out.Usage.CompletionTokens, TotalTokens: out.Usage.TotalTokens}
 		if u.TotalTokens == 0 {
 			u.TotalTokens = u.InputTokens + u.OutputTokens
 		}
-		return &GenerateResponse{Text: out.Choices[0].Message.Content, Usage: u}, nil
+		return &GenerateResponse{Text: text, Usage: u}, nil
 
 	case aiapi.Responses:
 		var out struct {
+			Status string `json:"status"`
+			Error  *struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
 			OutputText string `json:"output_text"`
 			Output     []struct {
+				Type    string `json:"type"`
 				Content []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
+					Type    string `json:"type"`
+					Text    string `json:"text"`
+					Refusal string `json:"refusal"`
 				} `json:"content"`
 			} `json:"output"`
 			Usage struct {
@@ -142,15 +194,32 @@ func ParseAIAPIResponse(protocol aiapi.Protocol, status int, body []byte) (*Gene
 		if err := json.Unmarshal(body, &out); err != nil {
 			return nil, fmt.Errorf("adapt: decode responses payload: %w", err)
 		}
+		if out.Error != nil && strings.TrimSpace(out.Error.Message) != "" {
+			return nil, fmt.Errorf("adapt: responses error (%s): %s", strings.TrimSpace(out.Error.Code), strings.TrimSpace(out.Error.Message))
+		}
 		text := strings.TrimSpace(out.OutputText)
 		if text == "" {
 			var parts []string
+			var refusals []string
 			for _, item := range out.Output {
+				if item.Type != "" && item.Type != "message" {
+					continue
+				}
 				for _, c := range item.Content {
-					if strings.TrimSpace(c.Text) != "" {
-						parts = append(parts, c.Text)
+					switch c.Type {
+					case "", "output_text", "text":
+						if strings.TrimSpace(c.Text) != "" {
+							parts = append(parts, c.Text)
+						}
+					case "refusal":
+						if strings.TrimSpace(c.Refusal) != "" {
+							refusals = append(refusals, strings.TrimSpace(c.Refusal))
+						}
 					}
 				}
+			}
+			if len(parts) == 0 && len(refusals) > 0 {
+				return nil, fmt.Errorf("adapt: responses refused output: %s", strings.Join(refusals, "; "))
 			}
 			text = strings.TrimSpace(strings.Join(parts, "\n"))
 		}
@@ -202,6 +271,39 @@ func ParseAIAPIResponse(protocol aiapi.Protocol, status int, body []byte) (*Gene
 	}
 }
 
+func extractChatMessageContent(raw json.RawMessage) (string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return "", nil
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return "", err
+		}
+		return s, nil
+	}
+	if trimmed[0] == '[' {
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(trimmed, &blocks); err != nil {
+			return "", err
+		}
+		var parts []string
+		for _, b := range blocks {
+			if b.Type == "" || b.Type == "text" || b.Type == "output_text" {
+				if strings.TrimSpace(b.Text) != "" {
+					parts = append(parts, b.Text)
+				}
+			}
+		}
+		return strings.Join(parts, "\n"), nil
+	}
+	return "", errors.New("unexpected content JSON type")
+}
+
 // Generate implements TextGenerator via aiapi and host.Transport.
 func (g *AIAPIGenerator) Generate(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
 	if g.Transport == nil {
@@ -209,13 +311,20 @@ func (g *AIAPIGenerator) Generate(ctx context.Context, req GenerateRequest) (*Ge
 	}
 	httpReq, err := g.BuildRequest(req)
 	if err != nil {
-		return nil, err
+		return nil, redactError(err, g.Config.APIKey)
 	}
 	resp, err := g.Transport.Do(ctx, httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("adapt: transport: %w", err)
+		return nil, redactError(fmt.Errorf("adapt: transport: %w", err), g.Config.APIKey)
 	}
-	return ParseAIAPIResponse(g.Config.Protocol, resp.Status, resp.Body)
+	if resp == nil {
+		return nil, errors.New("adapt: nil transport response")
+	}
+	out, err := ParseAIAPIResponse(g.Config.Protocol, resp.Status, resp.Body)
+	if err != nil {
+		return nil, redactError(err, g.Config.APIKey)
+	}
+	return out, nil
 }
 
 // ChunkOutput is the strict JSON schema expected from the text generator for
@@ -284,6 +393,11 @@ func ParseAdaptationJSON(raw string) (*ChunkOutput, error) {
 
 func stripJSONFence(s string) string {
 	trimmed := strings.TrimSpace(s)
+	if strings.HasPrefix(trimmed, "<think>") {
+		if end := strings.Index(trimmed, "</think>"); end >= 0 {
+			trimmed = strings.TrimSpace(trimmed[end+len("</think>"):])
+		}
+	}
 	if !strings.HasPrefix(trimmed, "```") {
 		return trimmed
 	}
