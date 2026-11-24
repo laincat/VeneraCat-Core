@@ -20,6 +20,8 @@ import (
 	"github.com/laincat/veneracat-core/attribution"
 	"github.com/laincat/veneracat-core/comic/js"
 	"github.com/laincat/veneracat-core/host"
+	"github.com/laincat/veneracat-core/novel"
+	noveljs "github.com/laincat/veneracat-core/novel/js"
 	"github.com/laincat/veneracat-core/video"
 	"github.com/laincat/veneracat-core/video/builtin/hongguo"
 	"github.com/laincat/veneracat-core/video/kazumi"
@@ -31,11 +33,12 @@ type Type string
 const (
 	TypeComic   Type = "comic"       // legacy ComicSource script
 	TypeVideoJS Type = "video-js"    // VideoSource script
+	TypeNovelJS Type = "novel-js"    // NovelSource script
 	TypeKazumi  Type = "kazumi-rule" // Kazumi rule JSON
 	TypeBuiltin Type = "builtin"     // provider compiled into Core
 )
 
-func (t Type) script() bool { return t == TypeComic || t == TypeVideoJS }
+func (t Type) script() bool { return t == TypeComic || t == TypeVideoJS || t == TypeNovelJS }
 
 // Record is what the client persists for an installed plugin.
 type Record struct {
@@ -107,16 +110,17 @@ type Registry struct {
 
 	op sync.Mutex // serialises mutating operations
 
-	mu      sync.Mutex // guards records and video
+	mu      sync.Mutex // guards records, video and novel
 	records map[string]*Record
 	video   map[string]video.Provider
+	novel   map[string]novel.Provider
 }
 
 // New creates a registry. rt runs comic and JavaScript video plugins; t is
 // the transport for Kazumi rules and built-ins (wrap it with
 // challenge.NewTransport for Cloudflare handling).
 func New(rt *js.Runtime, t host.Transport) *Registry {
-	return &Registry{js: rt, transport: t, records: map[string]*Record{}, video: map[string]video.Provider{}}
+	return &Registry{js: rt, transport: t, records: map[string]*Record{}, video: map[string]video.Provider{}, novel: map[string]novel.Provider{}}
 }
 
 func digest(s string) string {
@@ -129,7 +133,8 @@ type activation struct {
 	key, name, version string
 	attribution        attribution.Info
 	warnings           []string
-	provider           video.Provider // nil for comic sources
+	provider           video.Provider // nil for comic and novel sources
+	novel              novel.Provider // nil for comic and video sources
 	loadedScript       bool           // the JS runtime holds key
 }
 
@@ -147,11 +152,19 @@ func (r *Registry) activate(ctx context.Context, typ Type, body string) (*activa
 	return r.activateFor(ctx, typ, body, "", "")
 }
 
-func checkDeclaration(typ Type, expected string, meta js.Meta) error {
-	got := TypeComic
-	if meta.Kind == js.KindVideo {
-		got = TypeVideoJS
+func kindToType(k js.Kind) Type {
+	switch k {
+	case js.KindVideo:
+		return TypeVideoJS
+	case js.KindNovel:
+		return TypeNovelJS
+	default:
+		return TypeComic
 	}
+}
+
+func checkDeclaration(typ Type, expected string, meta js.Meta) error {
+	got := kindToType(meta.Kind)
 	if got != typ {
 		return fmt.Errorf("%w: script is a %s plugin, not %s", ErrWrongUse, got, typ)
 	}
@@ -178,7 +191,7 @@ func (r *Registry) activateFor(ctx context.Context, typ Type, body, expected, re
 			return nil, err
 		}
 		return &activation{key: info.Key, name: info.Name, version: info.Version, attribution: info.Attribution, provider: p}, nil
-	case TypeComic, TypeVideoJS:
+	case TypeComic, TypeVideoJS, TypeNovelJS:
 		if r.js == nil {
 			return nil, errors.New("plugin: no JavaScript runtime")
 		}
@@ -190,13 +203,21 @@ func (r *Registry) activateFor(ctx context.Context, typ Type, body, expected, re
 		}
 		a := &activation{key: meta.Key, name: meta.Name, version: meta.Version, attribution: meta.Attribution,
 			warnings: meta.Warnings, loadedScript: true}
-		if typ == TypeVideoJS {
+		switch typ {
+		case TypeVideoJS:
 			vp, err := r.js.VideoProvider(meta.Key)
 			if err != nil {
 				r.js.Unload(ctx, meta.Key)
 				return nil, err
 			}
 			a.provider = vp
+		case TypeNovelJS:
+			np, err := noveljs.NewProvider(r.js, meta.Key)
+			if err != nil {
+				r.js.Unload(ctx, meta.Key)
+				return nil, err
+			}
+			a.novel = np
 		}
 		return a, nil
 	case TypeBuiltin:
@@ -220,7 +241,7 @@ func (r *Registry) taken(key string) bool {
 }
 
 // publish stores rec and its provider.
-func (r *Registry) publish(rec *Record, p video.Provider) {
+func (r *Registry) publish(rec *Record, p video.Provider, n novel.Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.records[rec.Key] = rec
@@ -228,6 +249,11 @@ func (r *Registry) publish(rec *Record, p video.Provider) {
 		r.video[rec.Key] = p
 	} else {
 		delete(r.video, rec.Key)
+	}
+	if n != nil {
+		r.novel[rec.Key] = n
+	} else {
+		delete(r.novel, rec.Key)
 	}
 }
 
@@ -251,10 +277,7 @@ func (r *Registry) install(ctx context.Context, typ Type, body, origin, indexURL
 	if err != nil {
 		var duplicate *js.DuplicateKeyError
 		if errors.As(err, &duplicate) {
-			got := TypeComic
-			if duplicate.Kind == js.KindVideo {
-				got = TypeVideoJS
-			}
+			got := kindToType(duplicate.Kind)
 			if got != typ {
 				return nil, fmt.Errorf("%w: script is a %s plugin, not %s", ErrWrongUse, got, typ)
 			}
@@ -274,7 +297,7 @@ func (r *Registry) install(ctx context.Context, typ Type, body, origin, indexURL
 	rec := &Record{Type: typ, Key: a.key, Body: body, SHA256: sum, Origin: origin, IndexURL: indexURL,
 		Enabled: true, IndexAttribution: indexAttr}
 	a.apply(rec)
-	r.publish(rec, a.provider)
+	r.publish(rec, a.provider, a.novel)
 	return clone(rec), nil
 }
 
@@ -339,7 +362,7 @@ func (r *Registry) replace(ctx context.Context, key string, typ Type, body, orig
 				next.Name, next.Version = prev.Name, prev.Version
 			}
 		}
-		r.publish(&next, nil)
+		r.publish(&next, nil, nil)
 		return clone(&next), nil
 	}
 	a, err := r.activateFor(ctx, typ, body, key, key)
@@ -347,7 +370,7 @@ func (r *Registry) replace(ctx context.Context, key string, typ Type, body, orig
 		return nil, err
 	}
 	a.apply(&next)
-	r.publish(&next, a.provider)
+	r.publish(&next, a.provider, a.novel)
 	return clone(&next), nil
 }
 
@@ -364,7 +387,7 @@ func (r *Registry) EnableBuiltin(key string) (*Record, error) {
 	}
 	rec := &Record{Type: TypeBuiltin, Key: b.Key, Name: b.Name, Version: b.Version, Origin: "builtin", Enabled: true,
 		Attribution: b.Attribution}
-	r.publish(rec, b.New(r.transport))
+	r.publish(rec, b.New(r.transport), nil)
 	return clone(rec), nil
 }
 
@@ -385,11 +408,11 @@ func (r *Registry) Restore(ctx context.Context, recs []Record) map[string]error 
 		if rec.Type != TypeBuiltin && rec.SHA256 != "" && digest(rec.Body) != rec.SHA256 {
 			failed[rec.Key] = ErrChecksum
 			rec.Enabled = false
-			r.publish(&rec, nil)
+			r.publish(&rec, nil, nil)
 			continue
 		}
 		if !rec.Enabled {
-			r.publish(&rec, nil)
+			r.publish(&rec, nil, nil)
 			continue
 		}
 		var err error
@@ -398,7 +421,7 @@ func (r *Registry) Restore(ctx context.Context, recs []Record) map[string]error 
 			if !ok {
 				err = fmt.Errorf("plugin: no built-in %q", rec.Key)
 			} else {
-				r.publish(&rec, b.New(r.transport))
+				r.publish(&rec, b.New(r.transport), nil)
 				continue
 			}
 		} else {
@@ -406,13 +429,13 @@ func (r *Registry) Restore(ctx context.Context, recs []Record) map[string]error 
 			a, err = r.activateFor(ctx, rec.Type, rec.Body, rec.Key, "")
 			if err == nil {
 				a.apply(&rec)
-				r.publish(&rec, a.provider)
+				r.publish(&rec, a.provider, a.novel)
 				continue
 			}
 		}
 		failed[rec.Key] = err
 		rec.Enabled = false
-		r.publish(&rec, nil)
+		r.publish(&rec, nil, nil)
 	}
 	return failed
 }
@@ -441,10 +464,11 @@ func (r *Registry) SetEnabled(ctx context.Context, key string, on bool) error {
 			r.js.Unload(ctx, key)
 		}
 		rec.Enabled = false
-		r.publish(&rec, nil)
+		r.publish(&rec, nil, nil)
 		return nil
 	}
 	var p video.Provider
+	var n novel.Provider
 	switch rec.Type {
 	case TypeBuiltin:
 		b, ok := builtin(key)
@@ -459,9 +483,10 @@ func (r *Registry) SetEnabled(ctx context.Context, key string, on bool) error {
 		}
 		a.apply(&rec)
 		p = a.provider
+		n = a.novel
 	}
 	rec.Enabled = true
-	r.publish(&rec, p)
+	r.publish(&rec, p, n)
 	return nil
 }
 
@@ -477,6 +502,7 @@ func (r *Registry) Remove(ctx context.Context, key string) error {
 		typ, enabled = rec.Type, rec.Enabled
 		delete(r.records, key)
 		delete(r.video, key)
+		delete(r.novel, key)
 	}
 	r.mu.Unlock()
 	if !ok {
@@ -519,7 +545,7 @@ func (r *Registry) Video(key string) (video.Provider, error) {
 	switch {
 	case !ok:
 		return nil, ErrNotFound
-	case rec.Type == TypeComic:
+	case rec.Type == TypeComic || rec.Type == TypeNovelJS:
 		return nil, ErrWrongUse
 	case !rec.Enabled:
 		return nil, ErrDisabled
@@ -529,6 +555,26 @@ func (r *Registry) Video(key string) (video.Provider, error) {
 		return nil, ErrDisabled
 	}
 	return wrap(p), nil
+}
+
+// Novel returns the provider of an enabled novel plugin.
+func (r *Registry) Novel(key string) (novel.Provider, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.records[key]
+	switch {
+	case !ok:
+		return nil, ErrNotFound
+	case rec.Type != TypeNovelJS:
+		return nil, ErrWrongUse
+	case !rec.Enabled:
+		return nil, ErrDisabled
+	}
+	p, ok := r.novel[key]
+	if !ok || p == nil {
+		return nil, ErrDisabled
+	}
+	return p, nil
 }
 
 // Comic checks that key is an enabled comic source and returns the runtime

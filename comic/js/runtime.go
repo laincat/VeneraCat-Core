@@ -27,6 +27,9 @@ var defaultInit string
 //go:embed video-prelude.js
 var videoPrelude string
 
+//go:embed novel-prelude.js
+var novelPrelude string
+
 // ErrClosed is returned after Close.
 var ErrClosed = errors.New("js: runtime closed")
 
@@ -83,6 +86,11 @@ func New(opts Options, svc Services) (*Runtime, error) {
 			return nil, fmt.Errorf("js: video prelude: %w", err)
 		}
 		r.preludes = append(r.preludes, vp)
+		np, err := moejs.CompileScript("<novel-prelude>", novelPrelude)
+		if err != nil {
+			return nil, fmt.Errorf("js: novel prelude: %w", err)
+		}
+		r.preludes = append(r.preludes, np)
 	}
 	r.global, err = r.newEngine("", "global", nil)
 	if err != nil {

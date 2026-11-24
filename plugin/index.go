@@ -69,6 +69,6 @@ func (r *Registry) installExpecting(ctx context.Context, wantKey string, typ Typ
 	rec := &Record{Type: typ, Key: a.key, Body: body, SHA256: sum, Origin: origin, IndexURL: indexURL,
 		Enabled: true, IndexAttribution: indexAttr}
 	a.apply(rec)
-	r.publish(rec, a.provider)
+	r.publish(rec, a.provider, a.novel)
 	return clone(rec), nil
 }

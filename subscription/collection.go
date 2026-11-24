@@ -12,6 +12,9 @@ import (
 // CollectionSchema identifies the draft shared source collection format.
 const CollectionSchema = "veneracat-source/1-draft"
 
+// CapabilityNovelJS is the collection capability name for novel-js plugins.
+const CapabilityNovelJS = "novel-source.js"
+
 // Collection describes one publisher's cross-platform source. Parsing does not
 // fetch artifacts or grant permissions; those remain the client's responsibility.
 type Collection struct {

@@ -7,3 +7,5 @@ English | [简体中文](NOTICE-init.md)
 Interface names (globals, methods, message fields, constructor parameter names) are required for compatibility with existing ComicSource scripts and are not creative expression. The code that wraps them is original.
 
 `video-prelude.js` is a VeneraCat extension that adds the `VideoSource` base class; it is not part of the official interface.
+
+`novel-prelude.js` is a VeneraCat extension that adds the `NovelSource` base class; it is not part of the official interface.

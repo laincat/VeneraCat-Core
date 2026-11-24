@@ -446,3 +446,89 @@ func TestAttributionMerging(t *testing.T) {
 		t.Fatalf("restored = %+v / %+v", got.Attribution, got.IndexAttribution)
 	}
 }
+
+func TestNovelPluginLifecycle(t *testing.T) {
+	ctx := context.Background()
+	rt, err := js.New(js.Options{}, js.Services{Env: js.Environment{AppVersion: "1.0.0"}})
+	if err != nil {
+		t.Fatalf("js.New: %v", err)
+	}
+	defer rt.Close()
+	r := New(rt, nil)
+
+	const novelV1 = `
+class DemoNovel extends NovelSource {
+  name = "Demo Novel"
+  key = "n1"
+  version = "1.0.0"
+  async popular(page) { return { items: [{ id: "1", title: "Book 1" }], maxPage: 1 } }
+  async search(k, p) { return { items: [{ id: "1", title: k }] } }
+  async detail(id) { return { id, title: "Book 1", chapters: [{ id: "c1", title: "Ch 1" }] } }
+  async chapter(nid, cid) { return { html: "<p>v1</p>" } }
+}
+`
+	const novelV2 = `
+class DemoNovel extends NovelSource {
+  name = "Demo Novel"
+  key = "n1"
+  version = "2.0.0"
+  async popular(page) { return { items: [{ id: "1", title: "Book 1" }], maxPage: 1 } }
+  async search(k, p) { return { items: [{ id: "1", title: k }] } }
+  async detail(id) { return { id, title: "Book 1", chapters: [{ id: "c1", title: "Ch 1" }] } }
+  async chapter(nid, cid) { return { html: "<p>v2</p>" } }
+}
+`
+
+	rec, err := r.Install(ctx, TypeNovelJS, novelV1, "test", "", "")
+	if err != nil {
+		t.Fatalf("Install novel-js: %v", err)
+	}
+	if rec.Type != TypeNovelJS || rec.Key != "n1" || !rec.Enabled {
+		t.Fatalf("unexpected record: %+v", rec)
+	}
+
+	if _, err := r.Video("n1"); !errors.Is(err, ErrWrongUse) {
+		t.Fatalf("Video(n1) want ErrWrongUse, got %v", err)
+	}
+	if _, err := r.Comic("n1"); !errors.Is(err, ErrWrongUse) {
+		t.Fatalf("Comic(n1) want ErrWrongUse, got %v", err)
+	}
+
+	p, err := r.Novel("n1")
+	if err != nil {
+		t.Fatalf("Novel(n1): %v", err)
+	}
+	ch, err := p.Chapter(ctx, "1", "c1")
+	if err != nil || ch.HTML != "<p>v1</p>" {
+		t.Fatalf("Chapter v1: %+v err=%v", ch, err)
+	}
+
+	if err := r.SetEnabled(ctx, "n1", false); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if _, err := r.Novel("n1"); !errors.Is(err, ErrDisabled) {
+		t.Fatalf("Novel(n1) disabled want ErrDisabled, got %v", err)
+	}
+	if err := r.SetEnabled(ctx, "n1", true); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+
+	if _, err := r.Replace(ctx, "n1", TypeNovelJS, novelV2, "test", "", ""); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	p, err = r.Novel("n1")
+	if err != nil {
+		t.Fatalf("Novel(n1) after replace: %v", err)
+	}
+	ch, err = p.Chapter(ctx, "1", "c1")
+	if err != nil || ch.HTML != "<p>v2</p>" {
+		t.Fatalf("Chapter v2: %+v err=%v", ch, err)
+	}
+
+	if err := r.Remove(ctx, "n1"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := r.Novel("n1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Novel(n1) removed want ErrNotFound, got %v", err)
+	}
+}

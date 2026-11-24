@@ -7,3 +7,5 @@
 接口名称(全局对象、方法、消息字段、构造函数参数名)是兼容现有 ComicSource 脚本所必需的,不属于创作性表达;包装这些接口的代码是原创的。
 
 `video-prelude.js` 是 VeneraCat 的扩展,增加 `VideoSource` 基类,不属于官方接口。
+
+`novel-prelude.js` 是 VeneraCat 的扩展,增加 `NovelSource` 基类,不属于官方接口。

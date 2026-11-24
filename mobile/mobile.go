@@ -372,7 +372,7 @@ func (c *Core) InstallComicEntry(callID int64, entryJSON, body, indexURL string)
 	return encode(rec)
 }
 
-// Install installs a plugin: type is "comic", "video-js" or "kazumi-rule".
+// Install installs a plugin: type is "comic", "video-js", "novel-js" or "kazumi-rule".
 func (c *Core) Install(callID int64, typ, body, origin, indexURL, sha256 string) (_ string, err error) {
 	defer guard(&err)
 	defer c.endCall(callID)

@@ -22,13 +22,19 @@ const (
 	KindComic Kind = "comic"
 	// KindVideo is a VeneraCat VideoSource script.
 	KindVideo Kind = "video"
+	// KindNovel is a VeneraCat NovelSource script.
+	KindNovel Kind = "novel"
 )
 
 func (k Kind) base() string {
-	if k == KindVideo {
+	switch k {
+	case KindVideo:
 		return "VideoSource"
+	case KindNovel:
+		return "NovelSource"
+	default:
+		return "ComicSource"
 	}
-	return "ComicSource"
 }
 
 // registry is the JavaScript expression of the kind's source table.
@@ -59,7 +65,7 @@ func (e *LoadError) Error() string { return "js: invalid source: " + e.Reason }
 
 var (
 	keyPattern   = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
-	classPattern = regexp.MustCompile(`^class\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+extends\s+(ComicSource|VideoSource)\b`)
+	classPattern = regexp.MustCompile(`^class\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+extends\s+(ComicSource|VideoSource|NovelSource)\b`)
 )
 
 // ClassName finds the source class: the first line that starts with
@@ -76,19 +82,23 @@ func classOf(source string) (string, Kind, error) {
 		if !strings.HasPrefix(t, "class ") {
 			continue
 		}
-		if !strings.Contains(t, "extends ComicSource") && !strings.Contains(t, "extends VideoSource") {
-			return "", "", &LoadError{"the first class must extend ComicSource or VideoSource"}
+		if !strings.Contains(t, "extends ComicSource") && !strings.Contains(t, "extends VideoSource") && !strings.Contains(t, "extends NovelSource") {
+			return "", "", &LoadError{"the first class must extend ComicSource, VideoSource or NovelSource"}
 		}
 		m := classPattern.FindStringSubmatch(t)
 		if m == nil {
 			return "", "", &LoadError{"cannot read the class name"}
 		}
-		if m[2] == "VideoSource" {
+		switch m[2] {
+		case "VideoSource":
 			return m[1], KindVideo, nil
+		case "NovelSource":
+			return m[1], KindNovel, nil
+		default:
+			return m[1], KindComic, nil
 		}
-		return m[1], KindComic, nil
 	}
-	return "", "", &LoadError{"no class extends ComicSource or VideoSource"}
+	return "", "", &LoadError{"no class extends ComicSource, VideoSource or NovelSource"}
 }
 
 // LoadSource evaluates a ComicSource or VideoSource script in a fresh engine,
@@ -252,6 +262,14 @@ func (r *Runtime) validate(m Meta, replacing string) error {
 		}
 	}
 	return nil
+}
+
+// Source returns metadata for a loaded source by key.
+func (r *Runtime) Source(key string) (Meta, bool) {
+	r.smu.Lock()
+	defer r.smu.Unlock()
+	m, ok := r.sources[key]
+	return m, ok
 }
 
 // Unload removes a source and closes its engine.
