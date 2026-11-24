@@ -646,6 +646,12 @@ func sanitizeSecret(text, secret string) string {
 	if escaped := url.QueryEscape(secret); escaped != "" && escaped != secret {
 		clean = strings.ReplaceAll(clean, escaped, "[REDACTED]")
 	}
+	if trimmed := strings.TrimSpace(secret); trimmed != "" && trimmed != secret {
+		clean = strings.ReplaceAll(clean, trimmed, "[REDACTED]")
+		if escaped := url.QueryEscape(trimmed); escaped != "" && escaped != trimmed {
+			clean = strings.ReplaceAll(clean, escaped, "[REDACTED]")
+		}
+	}
 	return clean
 }
 
@@ -658,12 +664,14 @@ func redactError(err error, secret string) error {
 	if clean == msg {
 		return err
 	}
-	if errors.Is(err, ErrContentBlocked) {
-		detail := strings.TrimPrefix(clean, ErrContentBlocked.Error()+": ")
-		if detail == clean {
-			return fmt.Errorf("%w: %s", ErrContentBlocked, clean)
+	for _, sentinel := range []error{ErrContentBlocked, ErrBudgetExceeded, context.Canceled, context.DeadlineExceeded} {
+		if errors.Is(err, sentinel) {
+			detail := strings.TrimPrefix(clean, sentinel.Error()+": ")
+			if detail == clean {
+				return fmt.Errorf("%w: %s", sentinel, clean)
+			}
+			return fmt.Errorf("%w: %s", sentinel, detail)
 		}
-		return fmt.Errorf("%w: %s", ErrContentBlocked, detail)
 	}
 	return errors.New(clean)
 }

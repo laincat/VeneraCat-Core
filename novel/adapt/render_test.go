@@ -1001,3 +1001,62 @@ func TestConcurrentGeneratorsAndStoryboardsRaceFree(t *testing.T) {
 		t.Fatalf("expected %d saved images, got %d", workers*3, savedCount.Load())
 	}
 }
+
+func TestRedactPreservesContextCancelAndTrimmedKey(t *testing.T) {
+	const rawKey = "AIza-trimmed-secret-key"
+
+	t.Run("trimmed-key-redacted", func(t *testing.T) {
+		tr := &fakeTransport{
+			resp: &host.Response{
+				Status: 401,
+				Body:   []byte(`{"error":{"code":401,"status":"UNAUTHENTICATED","message":"bad key ` + rawKey + `"}}`),
+			},
+		}
+		gen := &adapt.GeminiImageGenerator{
+			APIKey:    "  " + rawKey + "  ",
+			Model:     "gemini-2.5-flash-image",
+			Transport: tr,
+		}
+		_, err := gen.GenerateImage(context.Background(), adapt.PanelImageRequest{Prompt: "test"})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if strings.Contains(err.Error(), rawKey) {
+			t.Fatalf("trimmed API key leaked into error: %v", err)
+		}
+	})
+
+	t.Run("context-canceled-preserved-after-redaction", func(t *testing.T) {
+		tr := &fakeTransport{
+			err: fmt.Errorf("request with key %s aborted: %w", rawKey, context.Canceled),
+		}
+		gen := &adapt.GeminiImageGenerator{
+			APIKey:    rawKey,
+			Model:     "gemini-2.5-flash-image",
+			Transport: tr,
+		}
+		_, err := gen.GenerateImage(context.Background(), adapt.PanelImageRequest{Prompt: "test"})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled to survive redaction, got %v", err)
+		}
+		if strings.Contains(err.Error(), rawKey) {
+			t.Fatalf("API key leaked into canceled error: %v", err)
+		}
+	})
+
+	t.Run("openai-multipart-rejects-crlf-mime", func(t *testing.T) {
+		gen := &adapt.OpenAIImageGenerator{
+			APIKey: "sk-test-key",
+			Model:  "gpt-image-1",
+		}
+		_, err := gen.BuildRequest(adapt.PanelImageRequest{
+			Prompt: "test",
+			References: []adapt.ImageRef{
+				{Kind: adapt.ImageRefStyle, MIMEType: "image/png\r\nX-Injected: bad", Data: samplePNG},
+			},
+		})
+		if err == nil {
+			t.Fatal("expected invalid multipart MIME type to be rejected")
+		}
+	})
+}

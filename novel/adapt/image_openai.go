@@ -149,7 +149,7 @@ func (g *OpenAIImageGenerator) buildEditsRequest(base, key, model, prompt, size,
 		if mimeType == "" {
 			mimeType = detectImageMIME(ref.Data)
 		}
-		if !strings.HasPrefix(strings.ToLower(mimeType), "image/") {
+		if !strings.HasPrefix(strings.ToLower(mimeType), "image/") || host.ValidHeader("Content-Type", mimeType) != nil {
 			return nil, fmt.Errorf("adapt: openai reference image has unsupported MIME type %q", mimeType)
 		}
 		fileName := fmt.Sprintf("ref_%d%s", i, extForMIME(mimeType))
