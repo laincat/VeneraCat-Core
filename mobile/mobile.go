@@ -33,6 +33,7 @@ import (
 	"github.com/laincat/veneracat-core/comic/image"
 	"github.com/laincat/veneracat-core/comic/js"
 	"github.com/laincat/veneracat-core/host"
+	"github.com/laincat/veneracat-core/novel"
 	"github.com/laincat/veneracat-core/plugin"
 	"github.com/laincat/veneracat-core/subscription"
 	"github.com/laincat/veneracat-core/video"
@@ -1425,6 +1426,79 @@ func (c *Core) VideoPlay(callID int64, key, itemID, lineID, episodeID string) (_
 		return "", err
 	}
 	return encode(play)
+}
+
+// --- novel -------------------------------------------------------------------
+
+func (c *Core) novel(key string) (novel.Provider, error) { return c.reg.Novel(key) }
+
+// NovelPopular returns a novel.Page as JSON.
+func (c *Core) NovelPopular(callID int64, key string, page int) (_ string, err error) {
+	defer guard(&err)
+	defer c.endCall(callID)
+	p, err := c.novel(key)
+	if err != nil {
+		return "", err
+	}
+	ctx, done := c.ctx(callID)
+	defer done()
+	res, err := p.Popular(ctx, page)
+	if err != nil {
+		return "", err
+	}
+	return encode(res)
+}
+
+// NovelSearch returns a novel.Page as JSON.
+func (c *Core) NovelSearch(callID int64, key, keyword string, page int) (_ string, err error) {
+	defer guard(&err)
+	defer c.endCall(callID)
+	p, err := c.novel(key)
+	if err != nil {
+		return "", err
+	}
+	ctx, done := c.ctx(callID)
+	defer done()
+	res, err := p.Search(ctx, keyword, page)
+	if err != nil {
+		return "", err
+	}
+	return encode(res)
+}
+
+// NovelDetail returns a novel.Detail as JSON.
+func (c *Core) NovelDetail(callID int64, key, id string) (_ string, err error) {
+	defer guard(&err)
+	defer c.endCall(callID)
+	p, err := c.novel(key)
+	if err != nil {
+		return "", err
+	}
+	ctx, done := c.ctx(callID)
+	defer done()
+	detail, err := p.Detail(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return encode(detail)
+}
+
+// NovelChapter returns a novel.ChapterContent as JSON with the raw HTML the
+// source returned; sanitisation and rendering belong to the client.
+func (c *Core) NovelChapter(callID int64, key, novelID, chapterID string) (_ string, err error) {
+	defer guard(&err)
+	defer c.endCall(callID)
+	p, err := c.novel(key)
+	if err != nil {
+		return "", err
+	}
+	ctx, done := c.ctx(callID)
+	defer done()
+	chapter, err := p.Chapter(ctx, novelID, chapterID)
+	if err != nil {
+		return "", err
+	}
+	return encode(chapter)
 }
 
 // --- subscriptions and backups --------------------------------------------------

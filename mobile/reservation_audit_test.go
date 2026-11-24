@@ -16,6 +16,9 @@ func TestAuditEarlyReturnReleasesTheReservation(t *testing.T) {
 		if _, err := c.VideoSearch(id, "ghost", "q", ""); err == nil {
 			t.Fatal("an unknown video source was accepted")
 		}
+		if _, err := c.NovelPopular(id, "ghost", 1); err == nil {
+			t.Fatal("an unknown novel source was accepted")
+		}
 	}
 
 	c.mu.Lock()
