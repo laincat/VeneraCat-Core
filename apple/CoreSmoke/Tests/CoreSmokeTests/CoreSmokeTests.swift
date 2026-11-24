@@ -309,6 +309,74 @@ final class CoreSmokeTests: XCTestCase {
         XCTAssertTrue(usage?["outputTokens"] is NSNull)
     }
 
+    func testWave3OfflineDanmakuAndAniBaka() throws {
+        let host = FakeHost()
+        host.routes = [
+            "https://wave3.test/search": #"{"items":[{"id":"1","title":"Star"}]}"#,
+            "https://wave3.test/detail": #"{"title":"Star","eps":[{"id":"ep1","title":"EP1"}]}"#,
+            "https://wave3.test/hls/index.m3u8": "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg0.ts\n#EXT-X-ENDLIST\n",
+            "https://wave3.test/hls/seg0.ts": "segment-bytes",
+        ]
+        let core = try makeCore(host)
+        defer { try? core.close() }
+
+        // 1. Local danmaku parsing and layout.
+        let xml = #"<i><d p="1.5,1,25,16777215,0,0,u1,1">Hello</d><d p="1.5,1,25,16711680,0,0,u2,2">World</d></i>"#
+        let parsed = try call { core.parseDanmaku("auto", content: xml, error: $0) }
+        XCTAssertTrue(parsed.contains("Hello"), parsed)
+        let layout = try call {
+            core.danmakuLayout("xml", content: xml, optionsJSON: #"{"viewportWidth":1280,"viewportHeight":720,"maxTracks":4}"#, error: $0)
+        }
+        XCTAssertTrue(layout.contains(#""track":1"#), layout)
+
+        // 2. AniBaka anx-rule/2 install and search/detail/play.
+        let rule = """
+        {
+          "$schema": "anx-rule/2",
+          "key": "anx_smoke",
+          "name": "Smoke AniBaka",
+          "version": "1.0.0",
+          "baseUrl": "https://wave3.test",
+          "search": {"steps": [
+            {"op": "fetch", "url": "/search"},
+            {"op": "json", "path": "$.items[*]", "all": true, "jsonFields": {"id": "$.id", "title": "$.title"}, "to": "items"}
+          ]},
+          "detail": {"steps": [
+            {"op": "fetch", "url": "/detail"},
+            {"op": "json", "path": "$.title", "to": "title", "keepPipe": true},
+            {"op": "json", "path": "$.eps[*]", "all": true, "jsonFields": {"id": "$.id", "title": "$.title"}, "to": "lines"}
+          ]},
+          "play": {"steps": [
+            {"op": "const", "value": "https://wave3.test/hls/index.m3u8", "to": "videoUrl"}
+          ]}
+        }
+        """
+        _ = try call { core.install(0, typ: "anibaka-rule", body: rule, origin: "smoke", indexURL: "", sha256: "", error: $0) }
+        let searchOut = try call { core.videoSearch(core.newCall(), key: "anx_smoke", keyword: "star", cursor: "", error: $0) }
+        XCTAssertTrue(searchOut.contains(#""Star""#), searchOut)
+        let playOut = try call { core.videoPlay(core.newCall(), key: "anx_smoke", itemID: "1", lineID: "line0", episodeID: "ep1", error: $0) }
+        XCTAssertTrue(playOut.contains("index.m3u8"), playOut)
+
+        // 3. Offline HLS plan, download, verify and remove.
+        let cacheRoot = FileManager.default.temporaryDirectory.appendingPathComponent("vc-wave3-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let reqObj: [String: Any] = [
+            "rootDir": cacheRoot.path,
+            "taskId": "smoke_ep1",
+            "url": "https://wave3.test/hls/index.m3u8",
+        ]
+        let reqJSON = String(data: try JSONSerialization.data(withJSONObject: reqObj), encoding: .utf8)!
+        let planOut = try call { core.videoOfflinePlan(core.newCall(), requestJSON: reqJSON, error: $0) }
+        XCTAssertTrue(planOut.contains("segments/s00000.ts"), planOut)
+        let dlOut = try call { core.videoOfflineDownload(core.newCall(), requestJSON: reqJSON, error: $0) }
+        XCTAssertTrue(dlOut.contains(#""status":"completed""#), dlOut)
+        let verOut = try call { core.videoOfflineVerify(cacheRoot.path, taskID: "smoke_ep1", error: $0) }
+        XCTAssertTrue(verOut.contains(#""valid":true"#), verOut)
+        let remOut = try call { core.videoOfflineRemove(cacheRoot.path, taskID: "smoke_ep1", error: $0) }
+        XCTAssertTrue(remOut.contains(#""reclaimedBytes""#), remOut)
+        print("SMOKE wave3 offline, danmaku and anibaka")
+    }
+
     func testEngineStartupCost() throws {
         let core = try makeCore(FakeHost())
         defer { try? core.close() }

@@ -31,8 +31,9 @@ const FileName = "vcvideo.json"
 
 // Plugin types a vcvideo.json may list.
 const (
-	TypeJS     = "js"          // a VideoSource JavaScript plugin
-	TypeKazumi = "kazumi-rule" // a Kazumi rule JSON file
+	TypeJS      = "js"           // a VideoSource JavaScript plugin
+	TypeKazumi  = "kazumi-rule"  // a Kazumi rule JSON file
+	TypeAniBaka = "anibaka-rule" // an AniBaka anx-rule/2 pipeline JSON file
 )
 
 // Index is a parsed vcvideo.json.
@@ -107,7 +108,7 @@ func Parse(data []byte, indexURL string) (*Index, error) {
 		p := &idx.Plugins[i]
 		where := fmt.Sprintf("vcvideo: plugins[%d]", i)
 		switch p.Type {
-		case TypeJS, TypeKazumi:
+		case TypeJS, TypeKazumi, TypeAniBaka:
 		default:
 			return nil, fmt.Errorf("%s: unknown type %q", where, p.Type)
 		}

@@ -39,6 +39,7 @@ All plugins share one key namespace (`^[a-zA-Z0-9_]+$`). The `plugin` package ma
 | `comic` | `*.js`, `class X extends ComicSource` | MoeJS, one engine per source | Comic `index.json`, files, backups |
 | `video-js` | `*.js`, `class X extends VideoSource` | MoeJS, one engine per source | `vcvideo.json`, files |
 | `kazumi-rule` | Kazumi rule `*.json` | Core's built-in rule engine (XPath/JSONPath) | `vcvideo.json`, files |
+| `anibaka-rule` | AniBaka `anx-rule/2` rule `*.json` | Core's built-in three-stage declarative pipeline engine (`video/anibaka`) | `vcvideo.json`, files |
 | `builtin` | Compiled into Core | Go | Enabled by the user in the app |
 
 Themes, layouts, feature modules, danmaku and Bangumi sync belong to later phases and have no type yet.
@@ -65,7 +66,7 @@ Video sources use **their own index** and are never mixed into a comic `index.js
 Rules (see `subscription/vcvideo.go`):
 
 - `$schema` must be the string `vcvideo/1`, and `name` is required. `$schema` is a fixed identifier, not a URL, so a GitHub code search can find third-party indexes; repositories that publish one should also add the topic `vcvideo`.
-- `plugins[].type` must be `js` (installed as `video-js`) or `kazumi-rule`; any other value makes the whole index invalid.
+- `plugins[].type` must be `js` (installed as `video-js`), `kazumi-rule` or `anibaka-rule`; any other value makes the whole index invalid.
 - `key`, `name`, `version` and `url` are required. `url` may be relative and is resolved against the index URL; only http(s) is accepted, without credentials.
 - `sha256` is optional; when present the file the client downloads must match it.
 - On install, the key the script declares must equal the entry's `key`.
@@ -131,6 +132,9 @@ Core handles everything that needs no network:
 
 - `video/hls`: m3u8 parsing and rewriting, filtering inserted ads, removing segment prefixes, picking one variant from a master playlist, rewriting segment URLs to the client's proxy, AES-128 decryption.
 - `video/kazumi`: the Kazumi rule engine; it takes HTML or JSON text and produces structured results.
+- `video/anibaka`: the AniBaka `anx-rule/2` declarative three-stage (search/detail/play) pipeline engine with fetch (strictly via `host.Transport`), CSS/XPath selection, regex, JSON, template/string ops, hash/Base64/AES crypto, HLS rewriting/ad-filtering and `sniff` fallback signals.
+- `video/offline`: the offline video cache foundation (HLS and direct-media planning, `host.Transport` downloads, resume, SHA-256 verification, local m3u8 rewriting and cache pruning).
+- `video/danmaku`: the local timed-comment parser, window index and basic anti-overlap track layout layer (Bilibili XML, ASS and JSON; online fetching is deferred to plugins).
 
 ## 7. Code layout
 
@@ -143,6 +147,9 @@ VeneraCat Core (Go)
 ├─ comic/...     convert, html, image, hostapi (http/cookie), version
 ├─ video         video data model and play result validation
 ├─ video/kazumi  Kazumi rule engine
+├─ video/anibaka AniBaka anx-rule/2 declarative pipeline engine
+├─ video/offline offline video caching and local m3u8 rewriting
+├─ video/danmaku local danmaku parsing, timeline queries and track layout
 ├─ video/builtin built-in providers (Hongguo)
 ├─ video/hls     HLS tools
 ├─ subscription  comic index.json and vcvideo.json
@@ -160,9 +167,8 @@ Decided:
 
 Later phases:
 
-1. AniBaka's `anx-rule/2` pipeline rules: the most capable, but with 30-odd operations they are a lot of work.
-2. Danmaku sources (DanDanPlay, Bangumi and others) and Bangumi sync.
-3. Video download and offline cache.
+1. Online danmaku source plugins (DanDanPlay, Bangumi and others) and Bangumi sync.
+2. Client UI integration for offline video caches, local danmaku rendering and AniBaka rules.
 
 ## 9. Authors and homepages (all plugins)
 

@@ -23,6 +23,7 @@ import (
 	"github.com/laincat/veneracat-core/novel"
 	noveljs "github.com/laincat/veneracat-core/novel/js"
 	"github.com/laincat/veneracat-core/video"
+	"github.com/laincat/veneracat-core/video/anibaka"
 	"github.com/laincat/veneracat-core/video/builtin/hongguo"
 	"github.com/laincat/veneracat-core/video/kazumi"
 )
@@ -31,11 +32,12 @@ import (
 type Type string
 
 const (
-	TypeComic   Type = "comic"       // legacy ComicSource script
-	TypeVideoJS Type = "video-js"    // VideoSource script
-	TypeNovelJS Type = "novel-js"    // NovelSource script
-	TypeKazumi  Type = "kazumi-rule" // Kazumi rule JSON
-	TypeBuiltin Type = "builtin"     // provider compiled into Core
+	TypeComic   Type = "comic"        // legacy ComicSource script
+	TypeVideoJS Type = "video-js"     // VideoSource script
+	TypeNovelJS Type = "novel-js"     // NovelSource script
+	TypeKazumi  Type = "kazumi-rule"  // Kazumi rule JSON
+	TypeAniBaka Type = "anibaka-rule" // AniBaka anx-rule/2 pipeline JSON
+	TypeBuiltin Type = "builtin"      // provider compiled into Core
 )
 
 func (t Type) script() bool { return t == TypeComic || t == TypeVideoJS || t == TypeNovelJS }
@@ -191,6 +193,17 @@ func (r *Registry) activateFor(ctx context.Context, typ Type, body, expected, re
 			return nil, err
 		}
 		return &activation{key: info.Key, name: info.Name, version: info.Version, attribution: info.Attribution, provider: p}, nil
+	case TypeAniBaka:
+		rule, err := anibaka.Parse([]byte(body))
+		if err != nil {
+			return nil, err
+		}
+		p := anibaka.New(rule, r.transport)
+		info := p.Info()
+		if err := checkKey(expected, info.Key); err != nil {
+			return nil, err
+		}
+		return &activation{key: info.Key, name: info.Name, version: info.Version, attribution: info.Attribution, provider: p}, nil
 	case TypeComic, TypeVideoJS, TypeNovelJS:
 		if r.js == nil {
 			return nil, errors.New("plugin: no JavaScript runtime")
@@ -337,8 +350,8 @@ func (r *Registry) replace(ctx context.Context, key string, typ Type, body, orig
 		IndexAttribution: prev.IndexAttribution, Attribution: prev.Attribution}
 	if !prev.Enabled {
 		// Validate without running anything: the new body is checked when the
-		// user enables the plugin. Kazumi rules can be parsed safely.
-		if typ == TypeKazumi {
+		// user enables the plugin. Declarative rules can be parsed safely.
+		if typ == TypeKazumi || typ == TypeAniBaka {
 			a, err := r.activateFor(ctx, typ, body, key, "")
 			if err != nil {
 				return nil, err

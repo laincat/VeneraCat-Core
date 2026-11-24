@@ -11,6 +11,8 @@ const good = `{
   "plugins": [
     {"type": "kazumi-rule", "key": "kz_AGE", "name": "AGE", "version": "1.6",
      "url": "rules/AGE.json"},
+    {"type": "anibaka-rule", "key": "anx_demo", "name": "Demo", "version": "1.0",
+     "url": "rules/demo.anx.json"},
     {"type": "js", "key": "demo_anime", "name": "示例番剧站", "version": "0.1.0",
      "url": "https://example.test/demo.js",
      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}

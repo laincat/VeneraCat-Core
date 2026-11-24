@@ -178,7 +178,7 @@ type Info struct {
 	Key     string `json:"key"`
 	Name    string `json:"name"`
 	Version string `json:"version"`
-	// Kind is "js", "kazumi-rule" or "builtin".
+	// Kind is "js", "kazumi-rule", "anibaka-rule" or "builtin".
 	Kind    string `json:"kind"`
 	BaseURL string `json:"baseUrl,omitempty"`
 	// Attribution is who wrote the provider and where it is published.

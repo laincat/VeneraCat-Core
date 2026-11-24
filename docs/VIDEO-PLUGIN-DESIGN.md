@@ -39,6 +39,7 @@ Core 必须兼容官方的两样东西:
 | `comic` | `*.js`,`class X extends ComicSource` | MoeJS,每个源一个引擎 | 漫画 `index.json`、文件、备份 |
 | `video-js` | `*.js`,`class X extends VideoSource` | MoeJS,每个源一个引擎 | `vcvideo.json`、文件 |
 | `kazumi-rule` | Kazumi 规则 `*.json` | Core 内置规则引擎(XPath/JSONPath) | `vcvideo.json`、文件 |
+| `anibaka-rule` | AniBaka `anx-rule/2` 规则 `*.json` | Core 内置三阶段声明式流水线引擎(`video/anibaka`) | `vcvideo.json`、文件 |
 | `builtin` | 编译进 Core | Go | 用户在应用内启用 |
 
 主题、布局、功能模块、弹幕和 Bangumi 同步属于后续阶段,尚未定义类型。
@@ -65,7 +66,7 @@ Core 必须兼容官方的两样东西:
 规则(见 `subscription/vcvideo.go`):
 
 - `$schema` 必须是字符串 `vcvideo/1`,`name` 必填。`$schema` 是固定标识而不是网址,便于在 GitHub 上用代码搜索找到第三方订阅;发布订阅的仓库还应添加 topic `vcvideo`。
-- `plugins[].type` 只能是 `js`(安装为 `video-js`)或 `kazumi-rule`;其他值会使整份索引无效。
+- `plugins[].type` 只能是 `js`(安装为 `video-js`)、`kazumi-rule` 或 `anibaka-rule`;其他值会使整份索引无效。
 - `key`、`name`、`version`、`url` 必填。`url` 可以是相对地址,按索引地址解析;只接受 http(s),不能带账号密码。
 - `sha256` 可选;提供时客户端下载的文件必须匹配。
 - 安装时脚本声明的 key 必须与条目的 `key` 一致。
@@ -131,6 +132,9 @@ Core 负责不联网的部分:
 
 - `video/hls`:m3u8 解析与改写、过滤插播广告、去分片前缀、主播放列表选一路、把分片地址改写到客户端代理、AES-128 解密。
 - `video/kazumi`:Kazumi 规则引擎,输入 HTML 或 JSON 文本,输出结构化结果。
+- `video/anibaka`:AniBaka `anx-rule/2` 声明式三阶段(search/detail/play)操作流水线引擎,支持 fetch(严格经 `host.Transport`)、CSS/XPath 选择、正则、JSON、模板与字符串处理、哈希/Base64/AES 加解密、HLS 改写去广告与 `sniff` 回退信号。
+- `video/offline`:视频离线缓存底座(HLS 与直链任务规划、经 `host.Transport` 拉取、断点续传、SHA-256 完整性校验、本地 m3u8 重写与缓存清理)。
+- `video/danmaku`:本地弹幕解析与时间轴层(Bilibili XML、ASS、JSON 解析、时间窗查询与基础轨道防重叠排版;在线弹幕抓取后置由插件实现)。
 
 ## 7. 代码结构
 
@@ -143,6 +147,9 @@ VeneraCat Core (Go)
 ├─ comic/...     convert、html、image、hostapi(http/cookie)、version
 ├─ video         视频数据模型与播放结果校验
 ├─ video/kazumi  Kazumi 规则引擎
+├─ video/anibaka AniBaka anx-rule/2 声明式流水线引擎
+├─ video/offline 视频离线缓存与本地 m3u8 重写
+├─ video/danmaku 本地弹幕解析、时间轴查询与防重叠排版
 ├─ video/builtin 内置源(红果短剧)
 ├─ video/hls     HLS 工具
 ├─ subscription  漫画 index.json 与 vcvideo.json
@@ -160,9 +167,8 @@ VeneraCat Core (Go)
 
 后续阶段:
 
-1. AniBaka 的 `anx-rule/2` 流水线规则:能力最强,但操作多达 30 余种,工作量大。
-2. 弹幕来源(弹弹 Play、Bangumi 等)和 Bangumi 同步。
-3. 视频下载与离线缓存。
+1. 在线弹幕来源插件(弹弹 Play、Bangumi 等)和 Bangumi 同步。
+2. 客户端接入视频离线缓存、本地弹幕渲染与 AniBaka 规则管理界面。
 
 ## 9. 作者与主页(所有插件)
 

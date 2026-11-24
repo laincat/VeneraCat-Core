@@ -15,6 +15,8 @@ func FromVideoIndex(t string) (Type, error) {
 		return TypeVideoJS, nil
 	case subscription.TypeKazumi:
 		return TypeKazumi, nil
+	case subscription.TypeAniBaka:
+		return TypeAniBaka, nil
 	}
 	return "", fmt.Errorf("plugin: vcvideo type %q is not supported", t)
 }
